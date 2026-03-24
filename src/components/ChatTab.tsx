@@ -5,7 +5,6 @@ import { useModelLoader } from '../hooks/useModelLoader';
 import { ModelBanner } from './ModelBanner';
 import { MarkdownContent } from './MarkdownContent';
 import type { HistoryReporter } from '../types/history';
-import { generateClaudeText, type ClaudeSettings } from '../lib/anthropic';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -14,13 +13,11 @@ interface Message {
 }
 
 interface ChatTabProps extends HistoryReporter {
-  providerMode: 'local' | 'hybrid' | 'claude';
-  claude: ClaudeSettings;
   languageModelId?: string;
   onPinAnswer?: (entry: { prompt: string; response: string }) => void;
 }
 
-export function ChatTab({ onHistoryEntry, providerMode, claude, languageModelId, onPinAnswer }: ChatTabProps) {
+export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTabProps) {
   const loader = useModelLoader(ModelCategory.Language, false, languageModelId);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -52,63 +49,28 @@ export function ChatTab({ onHistoryEntry, providerMode, claude, languageModelId,
     setMessages((prev) => [...prev, { role: 'assistant', text: '' }]);
 
     try {
-      const canUseClaude = Boolean(claude.apiKey.trim());
-      const shouldUseClaudeFirst = providerMode === 'claude'
-        || (providerMode === 'hybrid' && loader.state !== 'ready' && canUseClaude);
-
-      let finalText = '';
-      let statsSummary = '';
-
-      const runClaude = async () => {
-        const result = await generateClaudeText(text, claude, {
-          maxTokens: 700,
-          temperature: 0.3,
-          systemPrompt: 'You are a helpful study assistant. Solve problems clearly and accurately. Show steps when useful, but keep the answer focused.',
-        });
-        finalText = result.text || 'Claude returned an empty response.';
-        statsSummary = result.usage
-          ? `Claude - ${result.usage.input_tokens ?? 0} in / ${result.usage.output_tokens ?? 0} out`
-          : 'Claude';
-      };
-
-      const runLocal = async () => {
-        if (loader.state !== 'ready') {
-          const ok = await loader.ensure();
-          if (!ok) {
-            throw new Error(loader.error || 'Could not load the local LLM.');
-          }
-        }
-
-        const { stream, result: resultPromise, cancel } = await TextGeneration.generateStream(text, {
-          maxTokens: 768,
-          temperature: 0.45,
-        });
-        cancelRef.current = cancel;
-
-        let accumulated = '';
-        for await (const token of stream) {
-          accumulated += token;
-          setAssistantMessage(assistantIdx, { role: 'assistant', text: accumulated });
-        }
-
-        const result = await resultPromise;
-        finalText = result.text || accumulated;
-        statsSummary = `${result.tokensUsed} tokens - ${result.tokensPerSecond.toFixed(1)} tok/s - ${result.latencyMs.toFixed(0)}ms`;
-      };
-
-      if (shouldUseClaudeFirst) {
-        await runClaude();
-      } else {
-        try {
-          await runLocal();
-        } catch (localError) {
-          if (providerMode !== 'local' && canUseClaude) {
-            await runClaude();
-          } else {
-            throw localError;
-          }
+      if (loader.state !== 'ready') {
+        const ok = await loader.ensure();
+        if (!ok) {
+          throw new Error(loader.error || 'Could not load the local LLM.');
         }
       }
+
+      const { stream, result: resultPromise, cancel } = await TextGeneration.generateStream(text, {
+        maxTokens: 768,
+        temperature: 0.45,
+      });
+      cancelRef.current = cancel;
+
+      let accumulated = '';
+      for await (const token of stream) {
+        accumulated += token;
+        setAssistantMessage(assistantIdx, { role: 'assistant', text: accumulated });
+      }
+
+      const result = await resultPromise;
+      const finalText = result.text || accumulated;
+      const statsSummary = `${result.tokensUsed} tokens - ${result.tokensPerSecond.toFixed(1)} tok/s - ${result.latencyMs.toFixed(0)}ms`;
 
       setAssistantMessage(assistantIdx, {
         role: 'assistant',
@@ -124,7 +86,7 @@ export function ChatTab({ onHistoryEntry, providerMode, claude, languageModelId,
       cancelRef.current = null;
       setGenerating(false);
     }
-  }, [input, generating, messages.length, loader, onHistoryEntry, providerMode, claude, setAssistantMessage]);
+  }, [input, generating, messages.length, loader, onHistoryEntry, setAssistantMessage]);
 
   const handleCancel = () => {
     cancelRef.current?.();
@@ -198,17 +160,15 @@ export function ChatTab({ onHistoryEntry, providerMode, claude, languageModelId,
     onPinAnswer?.({ prompt, response: message.text });
   };
 
-  const chatBadge = providerMode === 'claude'
-    ? 'Claude mode'
-    : loader.state === 'ready'
-      ? 'LLM streaming'
-      : loader.state === 'downloading'
-        ? 'LLM downloading'
-        : loader.state === 'loading'
-          ? 'LLM loading'
-          : loader.state === 'error'
-            ? 'LLM error'
-            : 'LLM not loaded';
+  const chatBadge = loader.state === 'ready'
+    ? 'LLM streaming'
+    : loader.state === 'downloading'
+      ? 'LLM downloading'
+      : loader.state === 'loading'
+        ? 'LLM loading'
+        : loader.state === 'error'
+          ? 'LLM error'
+          : 'LLM not loaded';
 
   return (
     <section className="card">
@@ -231,15 +191,13 @@ export function ChatTab({ onHistoryEntry, providerMode, claude, languageModelId,
         </div>
       </div>
 
-      {providerMode !== 'claude' && (
-        <ModelBanner
-          state={loader.state}
-          progress={loader.progress}
-          error={loader.error}
-          onLoad={loader.ensure}
-          label="LLM"
-        />
-      )}
+      <ModelBanner
+        state={loader.state}
+        progress={loader.progress}
+        error={loader.error}
+        onLoad={loader.ensure}
+        label="LLM"
+      />
 
       <div className="card-body">
         <div className="messages" ref={listRef}>
@@ -253,8 +211,15 @@ export function ChatTab({ onHistoryEntry, providerMode, claude, languageModelId,
             <div key={i} className={`msg ${msg.role}`}>
               <div className="msg-avatar">{msg.role === 'user' ? 'You' : 'AI'}</div>
               <div className="msg-stack">
-                <div className={`msg-bubble ${msg.role === 'assistant' && !msg.text ? 'typing' : ''}`}>
-                  <MarkdownContent className="markdown-content" content={msg.text || '...'} />
+                <div className="msg-bubble">
+                  {msg.role === 'user' ? (
+                    <div className="msg-text">{msg.text || '...'}</div>
+                  ) : (
+                    <MarkdownContent
+                      className="markdown-content chat-markdown"
+                      content={msg.text || '...'}
+                    />
+                  )}
                   {msg.stats && (
                     <div className="message-stats">
                       {msg.stats.summary}

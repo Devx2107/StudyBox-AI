@@ -239,6 +239,16 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
   const visualLevel = voiceState === 'idle' || voiceState === 'loading-models'
     ? 0
     : audioLevel;
+  const waveProfile = [0.18, 0.28, 0.42, 0.58, 0.76, 0.94, 1, 0.94, 0.76, 0.58, 0.42, 0.28, 0.18];
+  const waveBars = waveProfile.map((profile, index) => {
+    const baseHeight = 14 + profile * 14;
+    const activeLift = visualLevel * (10 + profile * 54);
+    return {
+      key: index,
+      height: voiceState === 'idle' || voiceState === 'loading-models' ? 12 : baseHeight + activeLift,
+      opacity: voiceState === 'idle' ? 0.45 : 0.62 + profile * 0.34,
+    };
+  });
 
   return (
     <section className="card">
@@ -270,13 +280,13 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
         <div className="voice-grid">
           <div className="voice-center">
             <div className="waveform" aria-hidden="true">
-              {Array.from({ length: 18 }).map((_, i) => (
+              {waveBars.map((bar) => (
                 <span
-                  key={i}
+                  key={bar.key}
                   className="wave-bar"
                   style={{
-                    height: `${10 + visualLevel * (14 + (i % 5) * 10)}px`,
-                    opacity: voiceState === 'idle' ? 0.45 : 1,
+                    height: `${bar.height}px`,
+                    opacity: bar.opacity,
                   }}
                 />
               ))}

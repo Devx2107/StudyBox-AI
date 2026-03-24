@@ -4,6 +4,7 @@ import { TextGeneration } from '@runanywhere/web-llamacpp';
 import { useModelLoader } from '../hooks/useModelLoader';
 import { ModelBanner } from './ModelBanner';
 import { MarkdownContent } from './MarkdownContent';
+import { AppSelect } from './AppSelect';
 import type { HistoryEntry, HistoryReporter } from '../types/history';
 
 type Difficulty = 'easy' | 'medium' | 'hard';
@@ -363,20 +364,30 @@ ${sourceText}`,
               <div className="quiz-controls">
                 <label className="settings-field">
                   <span>Questions</span>
-                  <select value={questionCount} onChange={(event) => setQuestionCount(Number(event.target.value))}>
-                    <option value={5}>5 Questions</option>
-                    <option value={10}>10 Questions</option>
-                    <option value={20}>20 Questions</option>
-                  </select>
+                  <AppSelect
+                    value={String(questionCount)}
+                    ariaLabel="Question count"
+                    onChange={(nextValue) => setQuestionCount(Number(nextValue))}
+                    options={[
+                      { value: '5', label: '5 Questions' },
+                      { value: '10', label: '10 Questions' },
+                      { value: '20', label: '20 Questions' },
+                    ]}
+                  />
                 </label>
 
                 <label className="settings-field">
                   <span>Difficulty</span>
-                  <select value={difficulty} onChange={(event) => setDifficulty(event.target.value as Difficulty)}>
-                    <option value="easy">Easy</option>
-                    <option value="medium">Medium</option>
-                    <option value="hard">Hard</option>
-                  </select>
+                  <AppSelect
+                    value={difficulty}
+                    ariaLabel="Difficulty"
+                    onChange={(nextValue) => setDifficulty(nextValue as Difficulty)}
+                    options={[
+                      { value: 'easy', label: 'Easy' },
+                      { value: 'medium', label: 'Medium' },
+                      { value: 'hard', label: 'Hard' },
+                    ]}
+                  />
                 </label>
               </div>
 

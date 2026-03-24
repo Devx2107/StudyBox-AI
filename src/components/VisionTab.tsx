@@ -5,7 +5,6 @@ import { useModelLoader } from '../hooks/useModelLoader';
 import { ModelBanner } from './ModelBanner';
 import { MarkdownContent } from './MarkdownContent';
 import type { HistoryReporter } from '../types/history';
-import { analyzeClaudeImage, type ClaudeSettings } from '../lib/anthropic';
 
 const LIVE_INTERVAL_MS = 2500;
 const LIVE_MAX_TOKENS = 20;
@@ -24,8 +23,6 @@ interface UploadedImage {
 }
 
 interface VisionTabProps extends HistoryReporter {
-  providerMode: 'local' | 'hybrid' | 'claude';
-  claude: ClaudeSettings;
   visionModelId?: string;
 }
 
@@ -67,30 +64,7 @@ async function extractImagePixels(file: File, targetMaxDim: number) {
   }
 }
 
-async function captureCameraFile(capture: VideoCapture, targetMaxDim: number) {
-  const video = capture.videoElement;
-  const width = video.videoWidth || 1280;
-  const height = video.videoHeight || 720;
-  const scale = Math.min(1, targetMaxDim / Math.max(width, height));
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(width * scale));
-  canvas.height = Math.max(1, Math.round(height * scale));
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Could not capture the current camera frame.');
-
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-  const blob = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((nextBlob) => {
-      if (nextBlob) resolve(nextBlob);
-      else reject(new Error('Could not export the camera frame.'));
-    }, 'image/jpeg', 0.92);
-  });
-
-  return new File([blob], 'camera-frame.jpg', { type: 'image/jpeg' });
-}
-
-export function VisionTab({ onHistoryEntry, providerMode, claude, visionModelId }: VisionTabProps) {
+export function VisionTab({ onHistoryEntry, visionModelId }: VisionTabProps) {
   const loader = useModelLoader(ModelCategory.Multimodal, false, visionModelId);
   const [cameraActive, setCameraActive] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -231,39 +205,10 @@ export function VisionTab({ onHistoryEntry, providerMode, claude, visionModelId 
     };
   }, [loader, prompt]);
 
-  const runClaudeVision = useCallback(async (file: File) => {
-    const response = await analyzeClaudeImage(prompt, file, claude, {
-      maxTokens: 900,
-      temperature: 0.25,
-      systemPrompt: 'You are a precise study assistant. Read the image carefully, solve problems accurately, and explain your reasoning clearly.',
-    });
-
-    return {
-      text: response.text || 'Claude returned an empty vision response.',
-      meta: response.usage
-        ? `Claude - ${response.usage.input_tokens ?? 0} in / ${response.usage.output_tokens ?? 0} out`
-        : 'Claude',
-    };
-  }, [claude, prompt]);
-
   const processUploadedImage = useCallback(async (file: File, maxTokens: number) => {
-    const preferClaude = providerMode === 'claude';
-    const canUseClaude = Boolean(claude.apiKey.trim());
-
-    if (preferClaude) {
-      return runClaudeVision(file);
-    }
-
-    try {
-      const { rgbPixels, width, height } = await extractImagePixels(file, CAPTURE_DIM);
-      return await runLocalVision(rgbPixels, width, height, maxTokens);
-    } catch (err) {
-      if (providerMode === 'hybrid' && canUseClaude) {
-        return runClaudeVision(file);
-      }
-      throw err;
-    }
-  }, [providerMode, claude.apiKey, runClaudeVision, runLocalVision]);
+    const { rgbPixels, width, height } = await extractImagePixels(file, CAPTURE_DIM);
+    return runLocalVision(rgbPixels, width, height, maxTokens);
+  }, [runLocalVision]);
 
   const processCameraFrame = useCallback(async (maxTokens: number) => {
     const capture = captureRef.current;
@@ -271,26 +216,10 @@ export function VisionTab({ onHistoryEntry, providerMode, claude, visionModelId 
       throw new Error('Start the camera or upload an image first.');
     }
 
-    const preferClaude = providerMode === 'claude';
-    const canUseClaude = Boolean(claude.apiKey.trim());
-
-    if (preferClaude) {
-      const file = await captureCameraFile(capture, 960);
-      return runClaudeVision(file);
-    }
-
-    try {
-      const frame = capture.captureFrame(CAPTURE_DIM);
-      if (!frame) throw new Error('Could not capture a frame from the camera.');
-      return await runLocalVision(frame.rgbPixels, frame.width, frame.height, maxTokens);
-    } catch (err) {
-      if (providerMode === 'hybrid' && canUseClaude) {
-        const file = await captureCameraFile(capture, 960);
-        return runClaudeVision(file);
-      }
-      throw err;
-    }
-  }, [providerMode, claude.apiKey, runClaudeVision, runLocalVision]);
+    const frame = capture.captureFrame(CAPTURE_DIM);
+    if (!frame) throw new Error('Could not capture a frame from the camera.');
+    return runLocalVision(frame.rgbPixels, frame.width, frame.height, maxTokens);
+  }, [runLocalVision]);
 
   const runAnalysis = useCallback(async (maxTokens: number) => {
     if (processingRef.current) return;
@@ -305,9 +234,10 @@ export function VisionTab({ onHistoryEntry, providerMode, claude, visionModelId 
         ? await processUploadedImage(uploadedImage.file, maxTokens)
         : await processCameraFrame(maxTokens);
 
+      const totalMs = performance.now() - startedAt;
       setResult({
         text: response.text,
-        totalMs: performance.now() - startedAt,
+        totalMs,
         meta: response.meta,
       });
 
@@ -411,15 +341,13 @@ export function VisionTab({ onHistoryEntry, providerMode, claude, visionModelId 
         <div className="card-badge">{liveMode ? 'camera + live' : 'camera + upload'}</div>
       </div>
 
-      {providerMode !== 'claude' && (
-        <ModelBanner
-          state={loader.state}
-          progress={loader.progress}
-          error={loader.error}
-          onLoad={loader.ensure}
-          label="VLM"
-        />
-      )}
+      <ModelBanner
+        state={loader.state}
+        progress={loader.progress}
+        error={loader.error}
+        onLoad={loader.ensure}
+        label="VLM"
+      />
 
       <div className="card-body">
         <div className="camera-frame">
@@ -512,7 +440,7 @@ export function VisionTab({ onHistoryEntry, providerMode, claude, visionModelId 
         />
 
         <p className="study-hint">
-          This page handles both live camera scans and uploaded study images. Local mode uses the offline VLM. Claude mode uses your API key for stronger image reasoning. Live mode is camera-only.
+          This page handles both live camera scans and uploaded study images. All processing runs fully on-device using the local VLM. Live mode is camera-only.
         </p>
 
         {error && (

@@ -51,7 +51,8 @@ export function SmartNotesTab({ history, selectedHistory, notes, languageModelId
         accumulated += token;
       }
       const final = (await result).text || accumulated;
-      onNotesChange(mode === 'replace' || !notes.trim() ? final : `${notes}\n\n${final}`);
+      const prefix = mode === 'replace' || !notes.trim() ? '' : `${notes}\n\n`;
+      onNotesChange(`${prefix}${final}`);
     } finally {
       setBusy(false);
     }

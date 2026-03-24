@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getAccelerationMode, initSDK } from "./runanywhere";
 import { ChatTab } from "./components/ChatTab";
 import { VisionTab } from "./components/VisionTab";
@@ -11,7 +11,7 @@ import { SettingsTab } from "./components/SettingsTab";
 import { ProfileTab } from "./components/ProfileTab";
 import { MarkdownContent } from "./components/MarkdownContent";
 import type { HistoryEntry, HistorySource } from "./types/history";
-import type { ClaudeSettings } from "./lib/anthropic";
+
 
 const tabs = [
   { id: "chat", label: "Chat", icon: "C", eyebrow: "Tutor mode", title: "Talk to", accent: "Your AI.", badge: "LLM Core" },
@@ -27,27 +27,29 @@ const tabs = [
 
 const HISTORY_STORAGE_KEY = "studybox-ai-history-log";
 const LEGACY_HISTORY_STORAGE_KEY = "studybox-history-log";
+const ACTIVE_TAB_STORAGE_KEY = "studybox-ai-active-tab";
 const THEME_STORAGE_KEY = "studybox-ai-theme";
-const LEGACY_THEME_STORAGE_KEY = "studybox-theme";
+const POMODORO_MUSIC_SOURCE_STORAGE_KEY = "studybox-ai-pomodoro-music-source";
+const POMODORO_MUSIC_VOLUME_STORAGE_KEY = "studybox-ai-pomodoro-music-volume";
 const NOTES_STORAGE_KEY = "studybox-ai-smart-notes";
 const LEGACY_NOTES_STORAGE_KEY = "studybox-smart-notes";
 const ACTIVITY_STORAGE_KEY = "studybox-ai-activity-days";
 const LEGACY_ACTIVITY_STORAGE_KEY = "studybox-activity-days";
 const POMODORO_COUNT_KEY = "studybox-ai-pomodoros";
 const LEGACY_POMODORO_COUNT_KEY = "studybox-pomodoros";
-const PROVIDER_MODE_KEY = "studybox-ai-provider-mode";
-const LEGACY_PROVIDER_MODE_KEY = "studybox-provider-mode";
-const CLAUDE_API_KEY_STORAGE_KEY = "studybox-ai-claude-api-key";
-const LEGACY_CLAUDE_API_KEY_STORAGE_KEY = "studybox-claude-api-key";
-const CLAUDE_MODEL_STORAGE_KEY = "studybox-ai-claude-model";
-const LEGACY_CLAUDE_MODEL_STORAGE_KEY = "studybox-claude-model";
+
 const LANGUAGE_MODEL_STORAGE_KEY = "studybox-ai-language-model";
 const VISION_MODEL_STORAGE_KEY = "studybox-ai-vision-model";
 const PINNED_STORAGE_KEY = "studybox-ai-pinned-items";
 const POMODORO_LOG_STORAGE_KEY = "studybox-ai-pomodoro-log";
+const POMODORO_MODE_STORAGE_KEY = "studybox-ai-pomodoro-mode";
+const POMODORO_SECONDS_LEFT_STORAGE_KEY = "studybox-ai-pomodoro-seconds-left";
 const PROFILE_STORAGE_KEY = "studybox-ai-profile-stats";
+const HISTORY_FILTER_STORAGE_KEY = "studybox-ai-history-filter";
 
 type PomodoroMode = "work" | "break5" | "break10";
+type PomodoroMusicSource = "lofi" | "rain";
+type PomodoroMusicStatus = "idle" | "playing" | "paused" | "error";
 
 interface PinnedAnswer {
   id: string;
@@ -61,6 +63,15 @@ interface PomodoroSession {
   label: string;
   minutes: number;
   completedAt: string;
+}
+
+interface PomodoroMusicState {
+  selectedSource: PomodoroMusicSource | null;
+  activeSource: PomodoroMusicSource | null;
+  status: PomodoroMusicStatus;
+  volume: number;
+  currentTrackUrl: string | null;
+  error: string | null;
 }
 
 interface ProfileStatsConfig {
@@ -93,6 +104,24 @@ const POMODORO_PRESETS: Record<PomodoroMode, { label: string; badge: string; sec
   break10: { label: "10 Min Break", badge: "break", seconds: 10 * 60 },
 };
 
+const MUSIC_TRACKS = {
+  lofi: Object.values(
+    import.meta.glob("./assets/music/lofi/*.{mp3,wav,ogg,m4a}", { eager: true, import: "default" }) as Record<string, string>,
+  ).sort(),
+  rain: Object.values(
+    import.meta.glob("./assets/music/rain/*.{mp3,wav,ogg,m4a}", { eager: true, import: "default" }) as Record<string, string>,
+  ).sort(),
+} satisfies Record<PomodoroMusicSource, string[]>;
+
+const DEFAULT_POMODORO_MUSIC_STATE: PomodoroMusicState = {
+  selectedSource: "lofi",
+  activeSource: null,
+  status: "paused",
+  volume: 0.2,
+  currentTrackUrl: null,
+  error: null,
+};
+
 const themes = [
   { id: "classic", label: "Classic" },
   { id: "blue", label: "Blue" },
@@ -101,10 +130,6 @@ const themes = [
   { id: "purple", label: "Purple" },
 ] as const;
 
-const claudeModels = [
-  { id: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },
-  { id: "claude-3-5-haiku-latest", label: "Claude Haiku 3.5" },
-] as const;
 
 const historySourceLabels: Record<HistorySource, string> = {
   chat: "Chat",
@@ -237,18 +262,64 @@ function getStreak(days: string[]) {
   return streak;
 }
 
+function isTabId(value: string | null): value is (typeof tabs)[number]["id"] {
+  return Boolean(value && tabs.some((tab) => tab.id === value));
+}
+
+function isThemeId(value: string | null): value is (typeof themes)[number]["id"] {
+  return Boolean(value && themes.some((themeOption) => themeOption.id === value));
+}
+
+function isHistoryFilter(value: string | null): value is "all" | HistorySource {
+  return value === "all" || value === "chat" || value === "voice" || value === "vision" || value === "quiz" || value === "tools";
+}
+
+function isPomodoroMode(value: string | null): value is PomodoroMode {
+  return value === "work" || value === "break5" || value === "break10";
+}
+
+function getStoredTheme(): (typeof themes)[number]["id"] {
+  if (typeof window === "undefined") return "classic";
+  const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+  return isThemeId(savedTheme) ? savedTheme : "classic";
+}
+
+function getStoredActiveTab(): (typeof tabs)[number]["id"] {
+  if (typeof window === "undefined") return "chat";
+  const savedTab = window.localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
+  return isTabId(savedTab) ? savedTab : "chat";
+}
+
+function getStoredPomodoroMusicState(): PomodoroMusicState {
+  if (typeof window === "undefined") return DEFAULT_POMODORO_MUSIC_STATE;
+  const savedSource = window.localStorage.getItem(POMODORO_MUSIC_SOURCE_STORAGE_KEY);
+  const savedVolume = Number(window.localStorage.getItem(POMODORO_MUSIC_VOLUME_STORAGE_KEY) ?? "");
+  const volume = Number.isFinite(savedVolume) && savedVolume >= 0 && savedVolume <= 1
+    ? savedVolume
+    : DEFAULT_POMODORO_MUSIC_STATE.volume;
+  if (savedSource === "lofi" || savedSource === "rain") {
+    return {
+      ...DEFAULT_POMODORO_MUSIC_STATE,
+      selectedSource: savedSource,
+      volume,
+    };
+  }
+  return {
+    ...DEFAULT_POMODORO_MUSIC_STATE,
+    volume,
+  };
+}
+
 export function App() {
   const [sdkReady, setSdkReady] = useState(false);
   const [sdkError, setSdkError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["id"]>("chat");
+  const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["id"]>(() => getStoredActiveTab());
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [historySourceFilter, setHistorySourceFilter] = useState<"all" | HistorySource>("all");
   const [historySearch, setHistorySearch] = useState("");
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
-  const [theme, setTheme] = useState<(typeof themes)[number]["id"]>("classic");
-  const [providerMode, setProviderMode] = useState<"local" | "hybrid" | "claude">("local");
-  const [claudeApiKey, setClaudeApiKey] = useState("");
-  const [claudeModel, setClaudeModel] = useState<(typeof claudeModels)[number]["id"]>("claude-sonnet-4-20250514");
+  const [theme, setTheme] = useState<(typeof themes)[number]["id"]>(() => getStoredTheme());
+
   const [preferredLanguageModelId, setPreferredLanguageModelId] = useState("");
   const [preferredVisionModelId, setPreferredVisionModelId] = useState("");
   const [profileStats, setProfileStats] = useState<ProfileStatsConfig>(DEFAULT_PROFILE_STATS);
@@ -261,8 +332,14 @@ export function App() {
   const [secondsLeft, setSecondsLeft] = useState(POMODORO_PRESETS.work.seconds);
   const [pomodoroRunning, setPomodoroRunning] = useState(false);
   const [pomodoroLog, setPomodoroLog] = useState<PomodoroSession[]>([]);
+  const [pomodoroMusic, setPomodoroMusic] = useState<PomodoroMusicState>(() => getStoredPomodoroMusicState());
   const [timerPopupOpen, setTimerPopupOpen] = useState(false);
   const timerPopupRef = useRef<HTMLDivElement | null>(null);
+  const pomodoroAudioRefs = useRef<Partial<Record<PomodoroMusicSource, HTMLAudioElement>>>({});
+  const lastTrackBySourceRef = useRef<Partial<Record<PomodoroMusicSource, string>>>({});
+  const pomodoroPlayRequestRef = useRef(0);
+  const lastAutoplaySourceRef = useRef<PomodoroMusicSource | null>(null);
+  const lastPomodoroRunningRef = useRef(false);
 
   const currentTab = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
   const showSupportSection = activeTab !== "profile" && activeTab !== "settings" && activeTab !== "quiz";
@@ -289,10 +366,9 @@ export function App() {
   const streak = useMemo(() => getStreak(activityDays), [activityDays]);
   const xp = history.length * 10 + completedPomodoros * 25;
   const pomodoroPreset = POMODORO_PRESETS[pomodoroMode];
-  const claude: ClaudeSettings = useMemo(() => ({
-    apiKey: claudeApiKey,
-    model: claudeModel,
-  }), [claudeApiKey, claudeModel]);
+  const selectedPomodoroMusicTracks = pomodoroMusic.selectedSource
+    ? MUSIC_TRACKS[pomodoroMusic.selectedSource]
+    : [];
   const achievements = [
     { id: "first-ask", label: "First Ask", unlocked: history.length >= 1 },
     { id: "five-sessions", label: "5 Sessions", unlocked: history.length >= 5 },
@@ -322,6 +398,243 @@ export function App() {
       };
     });
   }, [activityDays]);
+
+  useEffect(() => {
+    const sourceEntries = (["lofi", "rain"] as const).map((source) => {
+      const audio = new Audio();
+      audio.preload = "auto";
+      audio.volume = DEFAULT_POMODORO_MUSIC_STATE.volume;
+      pomodoroAudioRefs.current[source] = audio;
+      return [source, audio] as const;
+    });
+
+    return () => {
+      sourceEntries.forEach(([source, audio]) => {
+        audio.pause();
+        audio.removeAttribute("src");
+        audio.load();
+        delete pomodoroAudioRefs.current[source];
+      });
+    };
+  }, []);
+
+  useEffect(() => {
+    (["lofi", "rain"] as const).forEach((source) => {
+      const audio = pomodoroAudioRefs.current[source];
+      if (audio) {
+        audio.volume = pomodoroMusic.volume;
+      }
+    });
+  }, [pomodoroMusic.volume]);
+
+  useEffect(() => {
+    if (!pomodoroMusic.selectedSource) return;
+    if (selectedPomodoroMusicTracks.length > 0) return;
+
+    setPomodoroMusic((prev) => ({
+      ...prev,
+      activeSource: null,
+      status: "error",
+      currentTrackUrl: null,
+      error: `No ${pomodoroMusic.selectedSource} tracks found.`,
+    }));
+  }, [pomodoroMusic.selectedSource, selectedPomodoroMusicTracks.length]);
+
+  const getNextPomodoroTrack = useCallback((source: PomodoroMusicSource) => {
+    const tracks = MUSIC_TRACKS[source];
+    if (!tracks.length) return null;
+
+    if (tracks.length === 1) {
+      lastTrackBySourceRef.current[source] = tracks[0];
+      return tracks[0];
+    }
+
+    const previousTrack = lastTrackBySourceRef.current[source];
+    const candidates = tracks.filter((track) => track !== previousTrack);
+    const nextTrack = candidates[Math.floor(Math.random() * candidates.length)] ?? tracks[0];
+    lastTrackBySourceRef.current[source] = nextTrack;
+    return nextTrack;
+  }, []);
+
+  const playPomodoroSource = useCallback(async (source: PomodoroMusicSource, options?: { forceNewTrack?: boolean }) => {
+    const audio = pomodoroAudioRefs.current[source];
+    if (!audio) return false;
+    const requestId = ++pomodoroPlayRequestRef.current;
+
+    const tracks = MUSIC_TRACKS[source];
+    if (!tracks.length) {
+      setPomodoroMusic((prev) => ({
+        ...prev,
+        selectedSource: source,
+        activeSource: null,
+        status: "error",
+        currentTrackUrl: null,
+        error: `No ${source} tracks found.`,
+      }));
+      return false;
+    }
+
+    const rememberedTrack = lastTrackBySourceRef.current[source];
+    const shouldResumeRememberedTrack = !options?.forceNewTrack
+      && rememberedTrack
+      && tracks.includes(rememberedTrack);
+
+    const nextTrack = shouldResumeRememberedTrack
+      ? rememberedTrack
+      : getNextPomodoroTrack(source);
+
+    if (!nextTrack) {
+      setPomodoroMusic((prev) => ({
+        ...prev,
+        selectedSource: source,
+        activeSource: null,
+        status: "error",
+        currentTrackUrl: null,
+        error: `No ${source} tracks found.`,
+      }));
+      return false;
+    }
+
+    try {
+      (["lofi", "rain"] as const).forEach((otherSource) => {
+        if (otherSource !== source) {
+          pomodoroAudioRefs.current[otherSource]?.pause();
+        }
+      });
+
+      const isSameTrack = rememberedTrack === nextTrack && Boolean(audio.src);
+
+      if (!isSameTrack) {
+        audio.src = nextTrack;
+        audio.currentTime = 0;
+      }
+
+      if (options?.forceNewTrack || audio.ended) {
+        audio.currentTime = 0;
+      }
+
+      audio.volume = pomodoroMusic.volume;
+      await audio.play();
+
+      if (pomodoroPlayRequestRef.current !== requestId) {
+        return false;
+      }
+
+      setPomodoroMusic((prev) => ({
+        ...prev,
+        selectedSource: source,
+        activeSource: source,
+        status: "playing",
+        currentTrackUrl: nextTrack,
+        error: null,
+      }));
+      return true;
+    } catch (error) {
+      if (pomodoroPlayRequestRef.current !== requestId) {
+        return false;
+      }
+
+      const message = error instanceof Error ? error.message : String(error);
+      const friendlyMessage = message.includes("NotAllowedError")
+        ? "Autoplay blocked. Click Lofi or Rain again."
+        : message;
+
+      setPomodoroMusic((prev) => ({
+        ...prev,
+        selectedSource: source,
+        activeSource: source,
+        status: "error",
+        currentTrackUrl: nextTrack,
+        error: friendlyMessage,
+      }));
+      return false;
+    }
+  }, [getNextPomodoroTrack, pomodoroMusic.activeSource, pomodoroMusic.currentTrackUrl, pomodoroMusic.volume]);
+
+  const pausePomodoroMusic = useCallback(() => {
+    setPomodoroMusic((prev) => {
+      if (prev.activeSource) {
+        const activeAudio = pomodoroAudioRefs.current[prev.activeSource];
+        if (activeAudio) {
+          activeAudio.pause();
+        }
+        lastTrackBySourceRef.current[prev.activeSource] = prev.currentTrackUrl ?? lastTrackBySourceRef.current[prev.activeSource];
+      }
+      return {
+        ...prev,
+        status: prev.activeSource ? "paused" : "idle",
+        error: null,
+      };
+    });
+  }, []);
+
+  const togglePomodoroMusicSource = useCallback(async (source: PomodoroMusicSource) => {
+    const isSameSource = pomodoroMusic.selectedSource === source || pomodoroMusic.activeSource === source;
+
+    if (isSameSource) {
+      if (pomodoroMusic.status === "playing") {
+        pausePomodoroMusic();
+        return;
+      }
+
+      await playPomodoroSource(source);
+      return;
+    }
+
+    pausePomodoroMusic();
+    await playPomodoroSource(source);
+  }, [pausePomodoroMusic, playPomodoroSource, pomodoroMusic.activeSource, pomodoroMusic.selectedSource, pomodoroMusic.status]);
+
+  useEffect(() => {
+    const listeners = (["lofi", "rain"] as const).map((source) => {
+      const audio = pomodoroAudioRefs.current[source];
+      if (!audio) return null;
+
+      const handleEnded = () => {
+        if (pomodoroMusic.activeSource !== source) return;
+        void playPomodoroSource(source, { forceNewTrack: true });
+      };
+
+      const handleError = () => {
+        setPomodoroMusic((prev) => ({
+          ...prev,
+          status: "error",
+          error: "Could not play the selected music track.",
+        }));
+      };
+
+      audio.addEventListener("ended", handleEnded);
+      audio.addEventListener("error", handleError);
+      return { audio, handleEnded, handleError };
+    }).filter(Boolean);
+
+    return () => {
+      listeners.forEach((entry) => {
+        entry?.audio.removeEventListener("ended", entry.handleEnded);
+        entry?.audio.removeEventListener("error", entry.handleError);
+      });
+    };
+  }, [playPomodoroSource, pomodoroMusic.activeSource]);
+
+  useEffect(() => {
+    const wasRunning = lastPomodoroRunningRef.current;
+    const shouldAutoplay = pomodoroRunning
+      && Boolean(pomodoroMusic.selectedSource)
+      && (!wasRunning || lastAutoplaySourceRef.current !== pomodoroMusic.selectedSource);
+
+    lastPomodoroRunningRef.current = pomodoroRunning;
+
+    if (!pomodoroRunning) {
+      lastAutoplaySourceRef.current = pomodoroMusic.selectedSource;
+      pausePomodoroMusic();
+      return;
+    }
+
+    if (!pomodoroMusic.selectedSource || !shouldAutoplay) return;
+
+    lastAutoplaySourceRef.current = pomodoroMusic.selectedSource;
+    void playPomodoroSource(pomodoroMusic.selectedSource);
+  }, [pausePomodoroMusic, playPomodoroSource, pomodoroMusic.selectedSource, pomodoroRunning]);
 
   useEffect(() => {
     initSDK()
@@ -405,7 +718,7 @@ export function App() {
     };
 
     const handleWindowMouseOut = (event: MouseEvent) => {
-      if (!event.relatedTarget && !event.toElement) {
+      if (!event.relatedTarget) {
         hideCursor();
       }
     };
@@ -487,9 +800,9 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const savedTheme = (localStorage.getItem(THEME_STORAGE_KEY) ?? localStorage.getItem(LEGACY_THEME_STORAGE_KEY)) as (typeof themes)[number]["id"] | null;
-    if (savedTheme && themes.some((themeOption) => themeOption.id === savedTheme)) {
-      setTheme(savedTheme);
+    const savedFilter = localStorage.getItem(HISTORY_FILTER_STORAGE_KEY);
+    if (isHistoryFilter(savedFilter)) {
+      setHistorySourceFilter(savedFilter);
     }
 
     const savedNotes = localStorage.getItem(NOTES_STORAGE_KEY) ?? localStorage.getItem(LEGACY_NOTES_STORAGE_KEY);
@@ -504,18 +817,6 @@ export function App() {
       }
     }
 
-    const savedProviderMode = (localStorage.getItem(PROVIDER_MODE_KEY) ?? localStorage.getItem(LEGACY_PROVIDER_MODE_KEY)) as "local" | "hybrid" | "claude" | null;
-    if (savedProviderMode === "local" || savedProviderMode === "hybrid" || savedProviderMode === "claude") {
-      setProviderMode(savedProviderMode);
-    }
-
-    const savedClaudeKey = localStorage.getItem(CLAUDE_API_KEY_STORAGE_KEY) ?? localStorage.getItem(LEGACY_CLAUDE_API_KEY_STORAGE_KEY);
-    if (savedClaudeKey) setClaudeApiKey(savedClaudeKey);
-
-    const savedClaudeModel = (localStorage.getItem(CLAUDE_MODEL_STORAGE_KEY) ?? localStorage.getItem(LEGACY_CLAUDE_MODEL_STORAGE_KEY)) as (typeof claudeModels)[number]["id"] | null;
-    if (savedClaudeModel && claudeModels.some((model) => model.id === savedClaudeModel)) {
-      setClaudeModel(savedClaudeModel);
-    }
 
     const savedLanguageModel = localStorage.getItem(LANGUAGE_MODEL_STORAGE_KEY);
     if (savedLanguageModel) setPreferredLanguageModelId(savedLanguageModel);
@@ -544,6 +845,17 @@ export function App() {
         localStorage.removeItem(POMODORO_LOG_STORAGE_KEY);
       }
     }
+
+    const savedPomodoroMode = localStorage.getItem(POMODORO_MODE_STORAGE_KEY);
+    if (isPomodoroMode(savedPomodoroMode)) {
+      setPomodoroMode(savedPomodoroMode);
+      const savedSecondsLeft = Number(localStorage.getItem(POMODORO_SECONDS_LEFT_STORAGE_KEY) ?? "");
+      if (!Number.isNaN(savedSecondsLeft) && savedSecondsLeft > 0) {
+        setSecondsLeft(savedSecondsLeft);
+      } else {
+        setSecondsLeft(POMODORO_PRESETS[savedPomodoroMode].seconds);
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -555,21 +867,18 @@ export function App() {
   }, [history]);
 
   useEffect(() => {
+    localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTab);
+  }, [activeTab]);
+
+  useEffect(() => {
     document.body.dataset.theme = theme;
     localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
 
   useEffect(() => {
-    localStorage.setItem(PROVIDER_MODE_KEY, providerMode);
-  }, [providerMode]);
+    localStorage.setItem(HISTORY_FILTER_STORAGE_KEY, historySourceFilter);
+  }, [historySourceFilter]);
 
-  useEffect(() => {
-    localStorage.setItem(CLAUDE_API_KEY_STORAGE_KEY, claudeApiKey);
-  }, [claudeApiKey]);
-
-  useEffect(() => {
-    localStorage.setItem(CLAUDE_MODEL_STORAGE_KEY, claudeModel);
-  }, [claudeModel]);
 
   useEffect(() => {
     if (preferredLanguageModelId) localStorage.setItem(LANGUAGE_MODEL_STORAGE_KEY, preferredLanguageModelId);
@@ -600,6 +909,26 @@ export function App() {
   useEffect(() => {
     localStorage.setItem(POMODORO_LOG_STORAGE_KEY, JSON.stringify(pomodoroLog));
   }, [pomodoroLog]);
+
+  useEffect(() => {
+    localStorage.setItem(POMODORO_MODE_STORAGE_KEY, pomodoroMode);
+  }, [pomodoroMode]);
+
+  useEffect(() => {
+    localStorage.setItem(POMODORO_SECONDS_LEFT_STORAGE_KEY, String(secondsLeft));
+  }, [secondsLeft]);
+
+  useEffect(() => {
+    if (pomodoroMusic.selectedSource) {
+      localStorage.setItem(POMODORO_MUSIC_SOURCE_STORAGE_KEY, pomodoroMusic.selectedSource);
+    } else {
+      localStorage.removeItem(POMODORO_MUSIC_SOURCE_STORAGE_KEY);
+    }
+  }, [pomodoroMusic.selectedSource]);
+
+  useEffect(() => {
+    localStorage.setItem(POMODORO_MUSIC_VOLUME_STORAGE_KEY, String(pomodoroMusic.volume));
+  }, [pomodoroMusic.volume]);
 
   useEffect(() => {
     if (!pomodoroRunning) return undefined;
@@ -711,6 +1040,13 @@ export function App() {
   };
 
   const timerDisplay = `${String(Math.floor(secondsLeft / 60)).padStart(2, "0")}:${String(secondsLeft % 60).padStart(2, "0")}`;
+  const pomodoroMusicStatusLabel = pomodoroMusic.error
+    ? pomodoroMusic.error
+    : pomodoroMusic.selectedSource
+      ? `${pomodoroMusic.selectedSource} ${pomodoroMusic.status}`
+      : "choose ambient audio";
+  const navbarMusicState = pomodoroMusic.status === "playing" ? "playing" : "paused";
+  const navbarMusicSource = pomodoroMusic.selectedSource ?? "lofi";
 
   const downloadBlob = (content: string, type: string, filename: string) => {
     const blob = new Blob([content], { type });
@@ -734,12 +1070,6 @@ export function App() {
     if (!selectedHistory) return;
     const exportData = buildHistoryExport(selectedHistory);
     downloadBlob(exportData.text, "text/plain;charset=utf-8", `${toSafeFilename(selectedHistory.prompt)}.txt`);
-  };
-
-  const exportSelectedAsJson = () => {
-    if (!selectedHistory) return;
-    const exportData = buildHistoryExport(selectedHistory);
-    downloadBlob(exportData.json, "application/json;charset=utf-8", `${toSafeFilename(selectedHistory.prompt)}.json`);
   };
 
   const copySelectedEntry = async () => {
@@ -868,20 +1198,33 @@ export function App() {
         </nav>
 
         <div className="header-timer-shell" ref={timerPopupRef}>
-          <button
-            className={`header-timer ${pomodoroRunning ? "active" : ""}`}
-            type="button"
+          <div
+            className="header-timer-trigger"
             onClick={() => setTimerPopupOpen((prev) => !prev)}
+            role="button"
+            tabIndex={0}
             aria-expanded={timerPopupOpen}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                setTimerPopupOpen((prev) => !prev);
+              }
+            }}
           >
-            <span className="header-timer-mode">{pomodoroPreset.badge}</span>
-            <span className="header-timer-time">{timerDisplay}</span>
-          </button>
+            <div className={`header-timer ${pomodoroRunning ? "active" : ""}`}>
+              <span className="header-timer-bottom">{pomodoroPreset.badge}</span>
+              <span className="header-timer-top">{timerDisplay}</span>
+            </div>
+            <div className="header-timer header-music-pill" aria-hidden="true">
+              <span className="header-timer-top header-music-top">{navbarMusicSource}</span>
+              <span className="header-timer-bottom header-music-bottom">{navbarMusicState}</span>
+            </div>
+          </div>
 
           {timerPopupOpen && (
             <div className="header-timer-popup">
               <div className="header-timer-popup-head">
-                <span>Pomodoro Timer</span>
+                <span>Pomodoro</span>
                 <span>{pomodoroPreset.label}</span>
               </div>
 
@@ -925,10 +1268,60 @@ export function App() {
                 </div>
 
                 <div className="header-timer-actions">
-                  <button className="btn primary" type="button" onClick={() => setPomodoroRunning((prev) => !prev)}>
-                    {pomodoroRunning ? "Pause" : "Start"}
+                  <button
+                    className={`theme-chip pomodoro-chip pomodoro-action-chip ${pomodoroRunning ? "active" : ""}`}
+                    type="button"
+                    onClick={() => setPomodoroRunning((prev) => !prev)}
+                  >
+                    {pomodoroRunning ? "Pause" : "Play"}
                   </button>
-                  <button className="btn pink" type="button" onClick={endPomodoro}>End</button>
+                  <button className="theme-chip pomodoro-chip pomodoro-action-chip" type="button" onClick={endPomodoro}>
+                    Stop
+                  </button>
+                </div>
+
+                <div className="pomodoro-music-panel">
+                  <div className="pomodoro-music-head">
+                    <span>Ambient audio</span>
+                    <span>{pomodoroMusicStatusLabel}</span>
+                  </div>
+
+                  <div className="pomodoro-music-options">
+                    <button
+                      className={`theme-chip pomodoro-music-chip ${pomodoroMusic.selectedSource === "lofi" ? "active" : ""}`}
+                      type="button"
+                      onClick={() => void togglePomodoroMusicSource("lofi")}
+                    >
+                      Lofi
+                    </button>
+                    <button
+                      className={`theme-chip pomodoro-music-chip ${pomodoroMusic.selectedSource === "rain" ? "active" : ""}`}
+                      type="button"
+                      onClick={() => void togglePomodoroMusicSource("rain")}
+                    >
+                      Rain
+                    </button>
+                  </div>
+
+                  <label className="pomodoro-volume-row">
+                    <span>Volume</span>
+                    <input
+                      className="pomodoro-volume-slider"
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.01"
+                      value={pomodoroMusic.volume}
+                      onChange={(event) => {
+                        const nextVolume = Number(event.target.value);
+                        setPomodoroMusic((prev) => ({
+                          ...prev,
+                          volume: Number.isFinite(nextVolume) ? nextVolume : prev.volume,
+                        }));
+                      }}
+                    />
+                    <span>{Math.round(pomodoroMusic.volume * 100)}%</span>
+                  </label>
                 </div>
 
                 <div className="pomodoro-meta">
@@ -976,8 +1369,8 @@ export function App() {
 
       <div className="content full-page">
         <div className="main-stack">
-          {activeTab === "chat" && <ChatTab onHistoryEntry={addHistoryEntry} providerMode={providerMode} claude={claude} languageModelId={preferredLanguageModelId || undefined} onPinAnswer={addPinnedAnswer} />}
-          {activeTab === "vision" && <VisionTab onHistoryEntry={addHistoryEntry} providerMode={providerMode} claude={claude} visionModelId={preferredVisionModelId || undefined} />}
+          {activeTab === "chat" && <ChatTab onHistoryEntry={addHistoryEntry} languageModelId={preferredLanguageModelId || undefined} onPinAnswer={addPinnedAnswer} />}
+          {activeTab === "vision" && <VisionTab onHistoryEntry={addHistoryEntry} visionModelId={preferredVisionModelId || undefined} />}
           {activeTab === "voice" && <VoiceTab onHistoryEntry={addHistoryEntry} languageModelId={preferredLanguageModelId || undefined} />}
           {activeTab === "notes" && (
             <SmartNotesTab
@@ -1022,13 +1415,6 @@ export function App() {
               theme={theme}
               themes={[...themes]}
               onThemeChange={(value) => setTheme(value as (typeof themes)[number]["id"])}
-              providerMode={providerMode}
-              onProviderModeChange={setProviderMode}
-              claudeApiKey={claudeApiKey}
-              onClaudeApiKeyChange={setClaudeApiKey}
-              claudeModel={claudeModel}
-              claudeModels={[...claudeModels]}
-              onClaudeModelChange={(value) => setClaudeModel(value as (typeof claudeModels)[number]["id"])}
               preferredLanguageModelId={preferredLanguageModelId}
               onPreferredLanguageModelChange={setPreferredLanguageModelId}
               preferredVisionModelId={preferredVisionModelId}
@@ -1105,12 +1491,11 @@ export function App() {
                 {selectedHistory && (
                   <div className="history-preview">
                     <div className="history-actions">
-                      <button className="btn" onClick={copySelectedEntry} type="button">Copy</button>
-                      <button className="btn" onClick={shareSelectedEntry} type="button">Share</button>
-                      <button className="btn" onClick={exportSelectedAsText} type="button">Export .txt</button>
-                      <button className="btn" onClick={exportSelectedAsMarkdown} type="button">Export .md</button>
-                      <button className="btn" onClick={exportSelectedAsJson} type="button">Export .json</button>
-                      <button className="btn primary" onClick={exportSelectedAsPdf} type="button">Print / PDF</button>
+                      <button className="chat-header-btn history-preview-btn" onClick={copySelectedEntry} type="button">Copy</button>
+                      <button className="chat-header-btn history-preview-btn" onClick={shareSelectedEntry} type="button">Share</button>
+                      <button className="chat-header-btn history-preview-btn" onClick={exportSelectedAsText} type="button">Export .txt</button>
+                      <button className="chat-header-btn history-preview-btn" onClick={exportSelectedAsMarkdown} type="button">Export .md</button>
+                      <button className="chat-header-btn history-preview-btn" onClick={exportSelectedAsPdf} type="button">Print / PDF</button>
                     </div>
                     <div className="history-preview-label">Prompt</div>
                     <MarkdownContent className="markdown-content" content={selectedHistory.prompt} />

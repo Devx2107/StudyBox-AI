@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { ModelCategory, ModelManager } from '@runanywhere/web';
 import type { CompactModelDef } from '@runanywhere/web';
+import { AppSelect } from './AppSelect';
 
 interface OptionItem {
   id: string;
@@ -11,13 +12,6 @@ interface SettingsTabProps {
   theme: string;
   themes: OptionItem[];
   onThemeChange: (value: string) => void;
-  providerMode: 'local' | 'hybrid' | 'claude';
-  onProviderModeChange: (value: 'local' | 'hybrid' | 'claude') => void;
-  claudeApiKey: string;
-  onClaudeApiKeyChange: (value: string) => void;
-  claudeModel: string;
-  claudeModels: OptionItem[];
-  onClaudeModelChange: (value: string) => void;
   preferredLanguageModelId: string;
   onPreferredLanguageModelChange: (value: string) => void;
   preferredVisionModelId: string;
@@ -32,17 +26,41 @@ function toModelOption(model: CompactModelDef) {
   };
 }
 
+function getBrowserInstructions() {
+  if (typeof navigator === 'undefined') {
+    return {
+      name: 'Chrome / Edge',
+      path: 'chrome://settings/system',
+      note: 'Enable Use graphics acceleration when available and restart the browser.',
+    };
+  }
+
+  const brands = 'userAgentData' in navigator
+    ? ((navigator as Navigator & { userAgentData?: { brands?: Array<{ brand: string }> } }).userAgentData?.brands ?? [])
+        .map((entry) => entry.brand.toLowerCase())
+        .join(' ')
+    : '';
+  const ua = `${navigator.userAgent} ${brands}`.toLowerCase();
+
+  if (ua.includes('edg/')) {
+    return {
+      name: 'Edge',
+      path: 'edge://settings/system/manageSystem',
+      note: 'Enable Use graphics acceleration when available and restart the browser.',
+    };
+  }
+
+  return {
+    name: 'Chrome / related browser',
+    path: 'chrome://settings/system',
+    note: 'Enable Use graphics acceleration when available and restart the browser.',
+  };
+}
+
 export function SettingsTab({
   theme,
   themes,
   onThemeChange,
-  providerMode,
-  onProviderModeChange,
-  claudeApiKey,
-  onClaudeApiKeyChange,
-  claudeModel,
-  claudeModels,
-  onClaudeModelChange,
   preferredLanguageModelId,
   onPreferredLanguageModelChange,
   preferredVisionModelId,
@@ -64,10 +82,7 @@ export function SettingsTab({
       .map(toModelOption),
     [],
   );
-
-  const openHardwarePage = (url: string) => {
-    window.open(url, '_blank', 'noopener,noreferrer');
-  };
+  const browserInstructions = useMemo(() => getBrowserInstructions(), []);
 
   return (
     <section className="card">
@@ -101,89 +116,34 @@ export function SettingsTab({
 
         <div className="info-block settings-section">
           <div className="info-block-head">
-            <span>Provider</span>
-            <span>{providerMode}</span>
-          </div>
-          <div className="info-block-body settings-body">
-            <div className="provider-switcher">
-              {(['local', 'hybrid', 'claude'] as const).map((mode) => (
-                <button
-                  key={mode}
-                  className={`theme-chip ${providerMode === mode ? 'active' : ''}`}
-                  onClick={() => onProviderModeChange(mode)}
-                  type="button"
-                >
-                  {mode}
-                </button>
-              ))}
-            </div>
-
-            <label className="settings-field">
-              <span className="settings-label">Claude API key</span>
-              <input
-                className="history-search"
-                type="password"
-                placeholder="Paste Claude API key"
-                value={claudeApiKey}
-                onChange={(e) => onClaudeApiKeyChange(e.target.value)}
-              />
-            </label>
-
-            <label className="settings-field">
-              <span className="settings-label">Claude model</span>
-              <select
-                className="history-search"
-                value={claudeModel}
-                onChange={(e) => onClaudeModelChange(e.target.value)}
-              >
-                {claudeModels.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <p className="provider-note">Local keeps everything on-device. Hybrid prefers local and falls back to Claude. Claude uses your API key for text and image tasks.</p>
-          </div>
-        </div>
-
-        <div className="info-block settings-section">
-          <div className="info-block-head">
             <span>Model selection</span>
             <span>local runtime</span>
           </div>
           <div className="info-block-body settings-body">
             <label className="settings-field">
               <span className="settings-label">Language model</span>
-              <select
-                className="history-search"
+              <AppSelect
                 value={preferredLanguageModelId}
-                onChange={(e) => onPreferredLanguageModelChange(e.target.value)}
-              >
-                <option value="">Auto-select lightest model</option>
-                {languageModels.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.label}
-                  </option>
-                ))}
-              </select>
+                onChange={onPreferredLanguageModelChange}
+                ariaLabel="Language model"
+                options={[
+                  { value: '', label: 'Auto-select lightest model' },
+                  ...languageModels.map((model) => ({ value: model.id, label: model.label })),
+                ]}
+              />
             </label>
 
             <label className="settings-field">
               <span className="settings-label">Vision model</span>
-              <select
-                className="history-search"
+              <AppSelect
                 value={preferredVisionModelId}
-                onChange={(e) => onPreferredVisionModelChange(e.target.value)}
-              >
-                <option value="">Auto-select lightest model</option>
-                {visionModels.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.label}
-                  </option>
-                ))}
-              </select>
+                onChange={onPreferredVisionModelChange}
+                ariaLabel="Vision model"
+                options={[
+                  { value: '', label: 'Auto-select lightest model' },
+                  ...visionModels.map((model) => ({ value: model.id, label: model.label })),
+                ]}
+              />
             </label>
 
             <p className="provider-note">These preferences affect local chat, notes, flashcards, quizzes, concept maps, voice response generation, and vision analysis.</p>
@@ -207,16 +167,12 @@ export function SettingsTab({
               </div>
             </div>
 
-            <div className="settings-actions">
-              <button className="btn" type="button" onClick={() => openHardwarePage('chrome://settings/system')}>
-                Chrome system settings
-              </button>
-              <button className="btn" type="button" onClick={() => openHardwarePage('edge://settings/system')}>
-                Edge system settings
-              </button>
+            <div className="settings-instructions">
+              <p className="settings-instruction-note"><strong>{browserInstructions.name} instructions</strong></p>
+              <p className="settings-instruction-note">Go to <strong><code>{browserInstructions.path}</code></strong>.</p>
+              <p className="settings-instruction-note">Enable <strong><code>Use graphics acceleration when available</code></strong>.</p>
+              <p className="settings-instruction-note">Restart the browser after changing it.</p>
             </div>
-
-            <p className="provider-note">If your browser blocks those internal pages, open your browser settings manually and enable hardware acceleration, then restart the browser.</p>
           </div>
         </div>
       </div>
