@@ -3,6 +3,7 @@ import { ModelCategory, VideoCapture } from '@runanywhere/web';
 import { VLMWorkerBridge } from '@runanywhere/web-llamacpp';
 import { useModelLoader } from '../hooks/useModelLoader';
 import { ModelBanner } from './ModelBanner';
+import { MarkdownContent } from './MarkdownContent';
 import type { HistoryReporter } from '../types/history';
 import { analyzeClaudeImage, type ClaudeSettings } from '../lib/anthropic';
 
@@ -25,6 +26,7 @@ interface UploadedImage {
 interface VisionTabProps extends HistoryReporter {
   providerMode: 'local' | 'hybrid' | 'claude';
   claude: ClaudeSettings;
+  visionModelId?: string;
 }
 
 function rgbFromImageData(data: Uint8ClampedArray) {
@@ -88,8 +90,8 @@ async function captureCameraFile(capture: VideoCapture, targetMaxDim: number) {
   return new File([blob], 'camera-frame.jpg', { type: 'image/jpeg' });
 }
 
-export function VisionTab({ onHistoryEntry, providerMode, claude }: VisionTabProps) {
-  const loader = useModelLoader(ModelCategory.Multimodal);
+export function VisionTab({ onHistoryEntry, providerMode, claude, visionModelId }: VisionTabProps) {
+  const loader = useModelLoader(ModelCategory.Multimodal, false, visionModelId);
   const [cameraActive, setCameraActive] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [liveMode, setLiveMode] = useState(false);
@@ -396,11 +398,17 @@ export function VisionTab({ onHistoryEntry, providerMode, claude }: VisionTabPro
     });
   };
 
+  const sourceLabel = cameraActive
+    ? 'camera active'
+    : uploadedImage
+      ? 'uploaded image'
+      : 'camera + upload ready';
+
   return (
     <section className="card">
       <div className="card-header">
-        <div className="card-title">Vision scanner</div>
-        <div className="card-badge">{liveMode ? 'live mode' : uploadedImage ? 'uploaded image' : 'single frame'}</div>
+        <div className="card-title">Vision workspace</div>
+        <div className="card-badge">{liveMode ? 'camera + live' : 'camera + upload'}</div>
       </div>
 
       {providerMode !== 'claude' && (
@@ -452,6 +460,13 @@ export function VisionTab({ onHistoryEntry, providerMode, claude }: VisionTabPro
           disabled={liveMode}
         />
 
+        <div className="vision-mode-bar">
+          <span className={`vision-mode-chip ${cameraActive ? 'active' : ''}`}>camera</span>
+          <span className={`vision-mode-chip ${uploadedImage ? 'active' : ''}`}>upload</span>
+          <span className={`vision-mode-chip ${liveMode ? 'active live' : ''}`}>live</span>
+          <span className="vision-mode-summary">{sourceLabel}</span>
+        </div>
+
         <div className="vision-actions">
           <button className="btn" onClick={() => fileInputRef.current?.click()} type="button" disabled={liveMode}>
             Upload Image
@@ -497,7 +512,7 @@ export function VisionTab({ onHistoryEntry, providerMode, claude }: VisionTabPro
         />
 
         <p className="study-hint">
-          Local mode uses the offline VLM. Claude mode uses your API key for stronger image reasoning. Live mode is camera-only.
+          This page handles both live camera scans and uploaded study images. Local mode uses the offline VLM. Claude mode uses your API key for stronger image reasoning. Live mode is camera-only.
         </p>
 
         {error && (
@@ -513,7 +528,7 @@ export function VisionTab({ onHistoryEntry, providerMode, claude }: VisionTabPro
           <div className="result-panel">
             <div className="result-panel-header">{liveMode ? 'Live result' : 'Scan result'}</div>
             <div className="result-panel-body">
-              <p>{result.text}</p>
+              <MarkdownContent className="markdown-content" content={result.text} />
               {(result.totalMs > 0 || result.meta) && (
                 <div className="message-stats">
                   {result.meta ? `${result.meta} - ` : ''}

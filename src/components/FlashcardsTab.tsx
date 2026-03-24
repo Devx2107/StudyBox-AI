@@ -3,6 +3,7 @@ import { ModelCategory } from '@runanywhere/web';
 import { TextGeneration } from '@runanywhere/web-llamacpp';
 import { useModelLoader } from '../hooks/useModelLoader';
 import { ModelBanner } from './ModelBanner';
+import { MarkdownContent } from './MarkdownContent';
 import type { HistoryEntry } from '../types/history';
 
 interface Flashcard {
@@ -14,6 +15,7 @@ interface FlashcardsTabProps {
   history: HistoryEntry[];
   selectedHistory: HistoryEntry | null;
   notes: string;
+  languageModelId?: string;
 }
 
 function parseFlashcards(raw: string): Flashcard[] {
@@ -40,11 +42,13 @@ function parseFlashcards(raw: string): Flashcard[] {
     .slice(0, 8);
 }
 
-export function FlashcardsTab({ history, selectedHistory, notes }: FlashcardsTabProps) {
-  const loader = useModelLoader(ModelCategory.Language);
+export function FlashcardsTab({ history, selectedHistory, notes, languageModelId }: FlashcardsTabProps) {
+  const loader = useModelLoader(ModelCategory.Language, false, languageModelId);
   const [cards, setCards] = useState<Flashcard[]>([]);
-  const [flipped, setFlipped] = useState<number | null>(null);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [isFlipped, setIsFlipped] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [masteredIndexes, setMasteredIndexes] = useState<number[]>([]);
   const defaultSource = useMemo(() => {
     if (selectedHistory) {
       return `Prompt: ${selectedHistory.prompt}\nResponse: ${selectedHistory.response}`;
@@ -97,17 +101,46 @@ export function FlashcardsTab({ history, selectedHistory, notes }: FlashcardsTab
       }
       const final = (await result).text || accumulated;
       setCards(parseFlashcards(final));
-      setFlipped(null);
+      setActiveIndex(0);
+      setIsFlipped(false);
+      setMasteredIndexes([]);
     } finally {
       setBusy(false);
     }
+  };
+
+  const activeCard = cards[activeIndex] ?? null;
+
+  const flipCard = () => {
+    if (!activeCard) return;
+    setIsFlipped((prev) => !prev);
+  };
+
+  const goToPrevious = () => {
+    if (!cards.length) return;
+    setActiveIndex((prev) => (prev - 1 + cards.length) % cards.length);
+    setIsFlipped(false);
+  };
+
+  const goToNext = () => {
+    if (!cards.length) return;
+    setActiveIndex((prev) => (prev + 1) % cards.length);
+    setIsFlipped(false);
+  };
+
+  const rateCard = (rating: 'hard' | 'ok' | 'easy') => {
+    if (!cards.length) return;
+    if (rating === 'easy') {
+      setMasteredIndexes((prev) => (prev.includes(activeIndex) ? prev : [...prev, activeIndex]));
+    }
+    goToNext();
   };
 
   return (
     <section className="card">
       <div className="card-header">
         <div className="card-title">Flashcards</div>
-        <div className="card-badge">{cards.length} cards</div>
+        <div className="card-badge">{cards.length === 0 ? '0 / 0' : `${activeIndex + 1} / ${cards.length}`}</div>
       </div>
 
       <ModelBanner
@@ -118,48 +151,106 @@ export function FlashcardsTab({ history, selectedHistory, notes }: FlashcardsTab
         label="LLM"
       />
 
-      <div className="card-body study-layout">
-        <textarea
-          className="study-textarea study-textarea-sm"
-          value={sourceText}
-          onChange={(e) => setSourceText(e.target.value)}
-          placeholder="Paste notes or use a selected history item to generate flashcards."
-        />
+      <div className="card-body flashcards-layout">
+        <div className="flashcards-main">
+          {activeCard ? (
+            <>
+              <div className="flashcard-area">
+                <button
+                  className={`study-flashcard ${isFlipped ? 'flipped' : ''}`}
+                  type="button"
+                  onClick={flipCard}
+                >
+                  <div className="card-face">
+                    <div className="card-face-label">Question</div>
+                    <MarkdownContent className="card-face-text markdown-content" content={activeCard.front} />
+                    <div className="card-flip-hint">click to reveal</div>
+                  </div>
+                  <div className="card-back">
+                    <MarkdownContent className="card-back-text markdown-content" content={activeCard.back} />
+                    <div className="card-flip-hint card-flip-back">click to flip back</div>
+                  </div>
+                </button>
+              </div>
 
-        <div className="study-toolbar">
-          <button className="btn" type="button" onClick={useSelectedHistory} disabled={!selectedHistory}>
-            Use selected history
-          </button>
-          <button className="btn" type="button" onClick={useNotes} disabled={!notes.trim()}>
-            Use notes
-          </button>
-          <button className="btn" type="button" onClick={useRecentHistory} disabled={!history.length}>
-            Use recent history
-          </button>
-          <button className="btn primary" type="button" onClick={generateCards} disabled={busy || !sourceText.trim()}>
-            {busy ? 'Generating...' : 'Generate flashcards'}
-          </button>
-        </div>
-        <p className="study-hint">The source box stays in sync with your latest selection unless you start drafting your own material.</p>
+              <div className="fc-nav">
+                <button className="btn sm" type="button" onClick={goToPrevious}>Prev</button>
+                <span className="fc-counter">{activeIndex + 1} / {cards.length}</span>
+                <button className="btn sm" type="button" onClick={goToNext}>Next</button>
+              </div>
 
-        <div className="flashcards-grid">
-          {cards.length === 0 && (
+              <div className="fc-rating">
+                <button className="btn sm pink" type="button" onClick={() => rateCard('hard')}>Hard</button>
+                <button className="btn sm" type="button" onClick={() => rateCard('ok')}>OK</button>
+                <button className="btn sm cyan" type="button" onClick={() => rateCard('easy')}>Easy</button>
+              </div>
+            </>
+          ) : (
             <div className="empty-state">
               <h3>No cards yet</h3>
               <p>Generate a set from notes, chat history, or a vision answer.</p>
             </div>
           )}
-          {cards.map((card, index) => (
-            <button
-              key={`${card.front}-${index}`}
-              className={`flashcard ${flipped === index ? 'active' : ''}`}
-              type="button"
-              onClick={() => setFlipped(flipped === index ? null : index)}
-            >
-              <div className="flashcard-face">{flipped === index ? card.back : card.front}</div>
-              <div className="flashcard-meta">{flipped === index ? 'answer' : 'question'}</div>
-            </button>
-          ))}
+        </div>
+
+        <div className="info-stack">
+          <div className="info-block">
+            <div className="info-block-head">
+              <span>Deck source</span>
+              <span>{cards.length} cards</span>
+            </div>
+            <div className="info-block-body flashcards-side-body">
+              <div className="deck-list">
+                <button className="deck-item" type="button" onClick={useSelectedHistory} disabled={!selectedHistory}>
+                  <span className="deck-name">Selected entry</span>
+                  <span className="deck-count">{selectedHistory ? 'ready' : 'empty'}</span>
+                </button>
+                <button className="deck-item" type="button" onClick={useNotes} disabled={!notes.trim()}>
+                  <span className="deck-name">Notes</span>
+                  <span className="deck-count">{notes.trim() ? 'ready' : 'empty'}</span>
+                </button>
+                <button className="deck-item" type="button" onClick={useRecentHistory} disabled={!history.length}>
+                  <span className="deck-name">Recent history</span>
+                  <span className="deck-count">{history.length} entries</span>
+                </button>
+              </div>
+
+              <textarea
+                className="study-textarea study-textarea-sm"
+                value={sourceText}
+                onChange={(e) => setSourceText(e.target.value)}
+                placeholder="Paste notes or use a selected history item to generate flashcards."
+              />
+
+              <button className="btn primary full" type="button" onClick={generateCards} disabled={busy || !sourceText.trim()}>
+                {busy ? 'Generating...' : 'AI generate cards'}
+              </button>
+            </div>
+          </div>
+
+          <div className="info-block">
+            <div className="info-block-head">
+              <span>Deck stats</span>
+              <span>{masteredIndexes.length} mastered</span>
+            </div>
+            <div className="info-block-body">
+              <div className="streak-grid flashcards-stat-grid">
+                <div className="streak-stat">
+                  <strong>{cards.length}</strong>
+                  <span>Total Cards</span>
+                </div>
+                <div className="streak-stat">
+                  <strong>{masteredIndexes.length}</strong>
+                  <span>Mastered</span>
+                </div>
+                <div className="streak-stat">
+                  <strong>{cards.length ? activeIndex + 1 : 0}</strong>
+                  <span>Current</span>
+                </div>
+              </div>
+              <p className="study-hint">The source box stays in sync with your latest selection unless you start drafting your own material.</p>
+            </div>
+          </div>
         </div>
       </div>
     </section>

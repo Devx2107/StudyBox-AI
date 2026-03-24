@@ -9,11 +9,12 @@ interface SmartNotesTabProps {
   history: HistoryEntry[];
   selectedHistory: HistoryEntry | null;
   notes: string;
+  languageModelId?: string;
   onNotesChange: (next: string) => void;
 }
 
-export function SmartNotesTab({ history, selectedHistory, notes, onNotesChange }: SmartNotesTabProps) {
-  const loader = useModelLoader(ModelCategory.Language);
+export function SmartNotesTab({ history, selectedHistory, notes, languageModelId, onNotesChange }: SmartNotesTabProps) {
+  const loader = useModelLoader(ModelCategory.Language, false, languageModelId);
   const [busy, setBusy] = useState(false);
   const recentContext = useMemo(
     () => history.slice(0, 8).map((entry, index) => (

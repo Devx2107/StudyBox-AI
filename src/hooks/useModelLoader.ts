@@ -16,8 +16,13 @@ interface ModelLoaderResult {
  *
  * @param category - Which model category to ensure is loaded.
  * @param coexist  - If true, only unload same-category models (allows STT+LLM+TTS to coexist).
+ * @param preferredModelId - Optional specific registered model id to load for the category.
  */
-export function useModelLoader(category: ModelCategory, coexist = false): ModelLoaderResult {
+export function useModelLoader(
+  category: ModelCategory,
+  coexist = false,
+  preferredModelId?: string,
+): ModelLoaderResult {
   const [state, setState] = useState<LoaderState>(() =>
     ModelManager.getLoadedModel(category) ? 'ready' : 'idle',
   );
@@ -26,8 +31,10 @@ export function useModelLoader(category: ModelCategory, coexist = false): ModelL
   const loadingRef = useRef(false);
 
   const ensure = useCallback(async (): Promise<boolean> => {
+    const loadedModel = ModelManager.getLoadedModel(category);
+
     // Already loaded
-    if (ModelManager.getLoadedModel(category)) {
+    if (loadedModel && (!preferredModelId || loadedModel.id === preferredModelId)) {
       setState('ready');
       return true;
     }
@@ -46,7 +53,9 @@ export function useModelLoader(category: ModelCategory, coexist = false): ModelL
         return false;
       }
 
-      const model = models[0];
+      const model = (preferredModelId
+        ? models.find((candidate) => candidate.id === preferredModelId)
+        : null) ?? models[0];
 
       // Download if needed
       if (model.status !== 'downloaded' && model.status !== 'loaded') {
@@ -82,7 +91,7 @@ export function useModelLoader(category: ModelCategory, coexist = false): ModelL
     } finally {
       loadingRef.current = false;
     }
-  }, [category, coexist]);
+  }, [category, coexist, preferredModelId]);
 
   return { state, progress, error, ensure };
 }

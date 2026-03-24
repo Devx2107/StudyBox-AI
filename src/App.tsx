@@ -1,23 +1,28 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getAccelerationMode, initSDK } from "./runanywhere";
 import { ChatTab } from "./components/ChatTab";
 import { VisionTab } from "./components/VisionTab";
 import { VoiceTab } from "./components/VoiceTab";
-import { ToolsTab } from "./components/ToolsTab";
 import { SmartNotesTab } from "./components/SmartNotesTab";
 import { FlashcardsTab } from "./components/FlashcardsTab";
+import { QuizTab } from "./components/QuizTab";
 import { ConceptMapTab } from "./components/ConceptMapTab";
-import type { HistoryEntry } from "./types/history";
+import { SettingsTab } from "./components/SettingsTab";
+import { ProfileTab } from "./components/ProfileTab";
+import { MarkdownContent } from "./components/MarkdownContent";
+import type { HistoryEntry, HistorySource } from "./types/history";
 import type { ClaudeSettings } from "./lib/anthropic";
 
 const tabs = [
-  { id: "chat", label: "Chat", icon: "C", eyebrow: "Tutor mode", badge: "LLM Core" },
-  { id: "vision", label: "Vision", icon: "V", eyebrow: "Camera mode", badge: "VLM Lens" },
-  { id: "tools", label: "Tools", icon: "T", eyebrow: "Tool mode", badge: "Agent Tools" },
-  { id: "voice", label: "Voice", icon: "O", eyebrow: "Voice mode", badge: "Speech Stack" },
-  { id: "notes", label: "Notes", icon: "N", eyebrow: "Notes mode", badge: "Smart Notes" },
-  { id: "flashcards", label: "Cards", icon: "F", eyebrow: "Recall mode", badge: "Flashcards" },
-  { id: "map", label: "Map", icon: "M", eyebrow: "Map mode", badge: "Concept Graph" },
+  { id: "chat", label: "Chat", icon: "C", eyebrow: "Tutor mode", title: "Talk to", accent: "Your AI.", badge: "LLM Core" },
+  { id: "vision", label: "Vision", icon: "V", eyebrow: "Camera mode", title: "See and", accent: "Describe.", badge: "VLM Lens" },
+  { id: "voice", label: "Voice", icon: "O", eyebrow: "Voice mode", title: "Speak and", accent: "Learn.", badge: "Speech Stack" },
+  { id: "notes", label: "Notes", icon: "N", eyebrow: "Notes mode", title: "Write and", accent: "Summarise.", badge: "Smart Notes" },
+  { id: "flashcards", label: "Cards", icon: "F", eyebrow: "Recall mode", title: "Flip and", accent: "Master.", badge: "Flashcards" },
+  { id: "quiz", label: "Quiz", icon: "Q", eyebrow: "Quiz mode", title: "Test", accent: "Yourself.", badge: "Quiz Lab" },
+  { id: "map", label: "Map", icon: "M", eyebrow: "Map mode", title: "Map", accent: "It Out.", badge: "Concept Graph" },
+  { id: "profile", label: "Profile", icon: "P", eyebrow: "Profile mode", title: "Keep", accent: "Grinding.", badge: "Profile" },
+  { id: "settings", label: "Settings", icon: "S", eyebrow: "Settings mode", title: "Tune Your", accent: "Workspace.", badge: "Preferences" },
 ] as const;
 
 const HISTORY_STORAGE_KEY = "studybox-ai-history-log";
@@ -36,10 +41,13 @@ const CLAUDE_API_KEY_STORAGE_KEY = "studybox-ai-claude-api-key";
 const LEGACY_CLAUDE_API_KEY_STORAGE_KEY = "studybox-claude-api-key";
 const CLAUDE_MODEL_STORAGE_KEY = "studybox-ai-claude-model";
 const LEGACY_CLAUDE_MODEL_STORAGE_KEY = "studybox-claude-model";
+const LANGUAGE_MODEL_STORAGE_KEY = "studybox-ai-language-model";
+const VISION_MODEL_STORAGE_KEY = "studybox-ai-vision-model";
 const PINNED_STORAGE_KEY = "studybox-ai-pinned-items";
 const POMODORO_LOG_STORAGE_KEY = "studybox-ai-pomodoro-log";
+const PROFILE_STORAGE_KEY = "studybox-ai-profile-stats";
 
-type PomodoroMode = "work" | "short" | "long";
+type PomodoroMode = "work" | "break5" | "break10";
 
 interface PinnedAnswer {
   id: string;
@@ -55,10 +63,34 @@ interface PomodoroSession {
   completedAt: string;
 }
 
+interface ProfileStatsConfig {
+  userName: string;
+  welcome: string;
+  rankLabel: string;
+  xpTarget: number;
+  weeklyGoal: number;
+  weeklyHighlights: string[];
+  achievements: Array<{ id: string; label: string; description: string }>;
+}
+
+interface StudyStatsExport {
+  exportedAt: string;
+  version: 1;
+  profile: ProfileStatsConfig;
+  stats: {
+    history: HistoryEntry[];
+    notes: string;
+    activityDays: string[];
+    completedPomodoros: number;
+    pomodoroLog: PomodoroSession[];
+    pinnedAnswers: PinnedAnswer[];
+  };
+}
+
 const POMODORO_PRESETS: Record<PomodoroMode, { label: string; badge: string; seconds: number }> = {
   work: { label: "Focus Session", badge: "work", seconds: 25 * 60 },
-  short: { label: "Short Break", badge: "break", seconds: 5 * 60 },
-  long: { label: "Long Break", badge: "long break", seconds: 15 * 60 },
+  break5: { label: "5 Min Break", badge: "break", seconds: 5 * 60 },
+  break10: { label: "10 Min Break", badge: "break", seconds: 10 * 60 },
 };
 
 const themes = [
@@ -72,6 +104,36 @@ const claudeModels = [
   { id: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },
   { id: "claude-3-5-haiku-latest", label: "Claude Haiku 3.5" },
 ] as const;
+
+const historySourceLabels: Record<HistorySource, string> = {
+  chat: "Chat",
+  voice: "Voice",
+  vision: "Vision",
+  quiz: "Quiz",
+  tools: "Tools",
+};
+
+const DEFAULT_PROFILE_STATS: ProfileStatsConfig = {
+  userName: "Study Explorer",
+  welcome: "Welcome back",
+  rankLabel: "Level 8 Scholar",
+  xpTarget: 1000,
+  weeklyGoal: 200,
+  weeklyHighlights: [
+    "+50 XP - Solved a study problem",
+    "+25 XP - Completed a focus block",
+    "+30 XP - Generated flashcards",
+    "+10 XP - Kept the streak alive",
+  ],
+  achievements: [
+    { id: "first-ask", label: "First Ask", description: "Start your first study session" },
+    { id: "five-sessions", label: "5 Sessions", description: "Log five study entries" },
+    { id: "three-day-streak", label: "3-Day Streak", description: "Study three days in a row" },
+    { id: "pomodoro-five", label: "Pomodoro x5", description: "Complete five focus sessions" },
+    { id: "deep-work", label: "Deep Work", description: "Reach ten focus blocks" },
+    { id: "xp-1000", label: "1000 XP", description: "Cross 1000 total XP" },
+  ],
+};
 
 function toSafeFilename(value: string) {
   return value
@@ -179,12 +241,17 @@ export function App() {
   const [sdkError, setSdkError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["id"]>("chat");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [historySourceFilter, setHistorySourceFilter] = useState<"all" | HistorySource>("all");
   const [historySearch, setHistorySearch] = useState("");
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [theme, setTheme] = useState<(typeof themes)[number]["id"]>("classic");
   const [providerMode, setProviderMode] = useState<"local" | "hybrid" | "claude">("local");
   const [claudeApiKey, setClaudeApiKey] = useState("");
   const [claudeModel, setClaudeModel] = useState<(typeof claudeModels)[number]["id"]>("claude-sonnet-4-20250514");
+  const [preferredLanguageModelId, setPreferredLanguageModelId] = useState("");
+  const [preferredVisionModelId, setPreferredVisionModelId] = useState("");
+  const [profileStats, setProfileStats] = useState<ProfileStatsConfig>(DEFAULT_PROFILE_STATS);
+  const [statsImportStatus, setStatsImportStatus] = useState<string | null>(null);
   const [pinnedAnswers, setPinnedAnswers] = useState<PinnedAnswer[]>([]);
   const [notes, setNotes] = useState("");
   const [activityDays, setActivityDays] = useState<string[]>([]);
@@ -193,11 +260,24 @@ export function App() {
   const [secondsLeft, setSecondsLeft] = useState(POMODORO_PRESETS.work.seconds);
   const [pomodoroRunning, setPomodoroRunning] = useState(false);
   const [pomodoroLog, setPomodoroLog] = useState<PomodoroSession[]>([]);
+  const [timerPopupOpen, setTimerPopupOpen] = useState(false);
+  const timerPopupRef = useRef<HTMLDivElement | null>(null);
 
   const currentTab = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
-  const accel = sdkReady ? getAccelerationMode() : null;
+  const accelerationMode = sdkReady ? getAccelerationMode() : null;
+  const historySourceOptions = useMemo(() => {
+    const presentSources = new Set(history.map((entry) => entry.source));
+    return [
+      { id: "all" as const, label: "All" },
+      ...(["chat", "voice", "vision", "quiz", "tools"] as const)
+        .filter((source) => presentSources.has(source))
+        .map((source) => ({ id: source, label: historySourceLabels[source] })),
+    ];
+  }, [history]);
   const filteredHistory = history.filter((entry) => {
     const query = historySearch.trim().toLowerCase();
+    const matchesSource = historySourceFilter === "all" || entry.source === historySourceFilter;
+    if (!matchesSource) return false;
     if (!query) return true;
     return `${entry.source} ${entry.prompt} ${entry.response}`.toLowerCase().includes(query);
   });
@@ -206,18 +286,20 @@ export function App() {
     ?? null;
   const streak = useMemo(() => getStreak(activityDays), [activityDays]);
   const xp = history.length * 10 + completedPomodoros * 25;
-  const claudeConfigured = Boolean(claudeApiKey.trim());
   const pomodoroPreset = POMODORO_PRESETS[pomodoroMode];
   const claude: ClaudeSettings = useMemo(() => ({
     apiKey: claudeApiKey,
     model: claudeModel,
   }), [claudeApiKey, claudeModel]);
   const achievements = [
-    { label: "First Ask", unlocked: history.length >= 1 },
-    { label: "5 Sessions", unlocked: history.length >= 5 },
-    { label: "3-Day Streak", unlocked: streak >= 3 },
-    { label: "Pomodoro x5", unlocked: completedPomodoros >= 5 },
+    { id: "first-ask", label: "First Ask", unlocked: history.length >= 1 },
+    { id: "five-sessions", label: "5 Sessions", unlocked: history.length >= 5 },
+    { id: "three-day-streak", label: "3-Day Streak", unlocked: streak >= 3 },
+    { id: "pomodoro-five", label: "Pomodoro x5", unlocked: completedPomodoros >= 5 },
+    { id: "deep-work", label: "Deep Work", unlocked: completedPomodoros >= 10 },
+    { id: "xp-1000", label: "1000 XP", unlocked: xp >= 1000 },
   ];
+  const unlockedAchievementIds = achievements.filter((achievement) => achievement.unlocked).map((achievement) => achievement.id);
 
   const studyCalendar = useMemo(() => {
     const now = new Date();
@@ -259,6 +341,42 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+
+    const loadProfileStats = async () => {
+      const savedProfile = localStorage.getItem(PROFILE_STORAGE_KEY);
+      if (savedProfile) {
+        try {
+          const parsed = JSON.parse(savedProfile) as ProfileStatsConfig;
+          if (!cancelled) setProfileStats({ ...DEFAULT_PROFILE_STATS, ...parsed });
+          return;
+        } catch {
+          localStorage.removeItem(PROFILE_STORAGE_KEY);
+        }
+      }
+
+      try {
+        const response = await fetch("/profile-stats.json");
+        if (!response.ok) throw new Error(`Profile seed failed (${response.status})`);
+        const payload = await response.json() as Partial<ProfileStatsConfig>;
+        if (!cancelled) {
+          setProfileStats({ ...DEFAULT_PROFILE_STATS, ...payload });
+        }
+      } catch {
+        if (!cancelled) {
+          setProfileStats(DEFAULT_PROFILE_STATS);
+        }
+      }
+    };
+
+    void loadProfileStats();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     const savedTheme = (localStorage.getItem(THEME_STORAGE_KEY) ?? localStorage.getItem(LEGACY_THEME_STORAGE_KEY)) as (typeof themes)[number]["id"] | null;
     if (savedTheme && themes.some((themeOption) => themeOption.id === savedTheme)) {
       setTheme(savedTheme);
@@ -289,6 +407,12 @@ export function App() {
       setClaudeModel(savedClaudeModel);
     }
 
+    const savedLanguageModel = localStorage.getItem(LANGUAGE_MODEL_STORAGE_KEY);
+    if (savedLanguageModel) setPreferredLanguageModelId(savedLanguageModel);
+
+    const savedVisionModel = localStorage.getItem(VISION_MODEL_STORAGE_KEY);
+    if (savedVisionModel) setPreferredVisionModelId(savedVisionModel);
+
     const savedDays = localStorage.getItem(ACTIVITY_STORAGE_KEY) ?? localStorage.getItem(LEGACY_ACTIVITY_STORAGE_KEY);
     if (savedDays) {
       try {
@@ -313,6 +437,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profileStats));
+  }, [profileStats]);
+
+  useEffect(() => {
     localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
   }, [history]);
 
@@ -332,6 +460,16 @@ export function App() {
   useEffect(() => {
     localStorage.setItem(CLAUDE_MODEL_STORAGE_KEY, claudeModel);
   }, [claudeModel]);
+
+  useEffect(() => {
+    if (preferredLanguageModelId) localStorage.setItem(LANGUAGE_MODEL_STORAGE_KEY, preferredLanguageModelId);
+    else localStorage.removeItem(LANGUAGE_MODEL_STORAGE_KEY);
+  }, [preferredLanguageModelId]);
+
+  useEffect(() => {
+    if (preferredVisionModelId) localStorage.setItem(VISION_MODEL_STORAGE_KEY, preferredVisionModelId);
+    else localStorage.removeItem(VISION_MODEL_STORAGE_KEY);
+  }, [preferredVisionModelId]);
 
   useEffect(() => {
     localStorage.setItem(NOTES_STORAGE_KEY, notes);
@@ -362,6 +500,19 @@ export function App() {
   }, [pomodoroRunning]);
 
   useEffect(() => {
+    if (!timerPopupOpen) return undefined;
+
+    const handleOutsideClick = (event: MouseEvent) => {
+      if (!timerPopupRef.current?.contains(event.target as Node)) {
+        setTimerPopupOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, [timerPopupOpen]);
+
+  useEffect(() => {
     if (secondsLeft > 0) return;
 
     const finishedMode = pomodoroMode;
@@ -384,8 +535,8 @@ export function App() {
         const today = new Date().toISOString().slice(0, 10);
         return prev.includes(today) ? prev : [today, ...prev];
       });
-      setPomodoroMode("short");
-      setSecondsLeft(POMODORO_PRESETS.short.seconds);
+      setPomodoroMode("break5");
+      setSecondsLeft(POMODORO_PRESETS.break5.seconds);
     } else {
       setPomodoroMode("work");
       setSecondsLeft(POMODORO_PRESETS.work.seconds);
@@ -414,14 +565,9 @@ export function App() {
     setSelectedHistoryId(null);
   };
 
-  const resetPomodoro = () => {
-    setPomodoroRunning(false);
-    setSecondsLeft(POMODORO_PRESETS[pomodoroMode].seconds);
-  };
-
   const skipPomodoro = () => {
     setPomodoroRunning(false);
-    const nextMode: PomodoroMode = pomodoroMode === "work" ? "short" : "work";
+    const nextMode: PomodoroMode = pomodoroMode === "work" ? "break5" : "work";
     setPomodoroMode(nextMode);
     setSecondsLeft(POMODORO_PRESETS[nextMode].seconds);
   };
@@ -430,6 +576,12 @@ export function App() {
     setPomodoroRunning(false);
     setPomodoroMode(mode);
     setSecondsLeft(POMODORO_PRESETS[mode].seconds);
+  };
+
+  const endPomodoro = () => {
+    setPomodoroRunning(false);
+    setPomodoroMode("work");
+    setSecondsLeft(POMODORO_PRESETS.work.seconds);
   };
 
   const addPinnedAnswer = (entry: { prompt: string; response: string }) => {
@@ -447,6 +599,8 @@ export function App() {
   const removePinnedAnswer = (id: string) => {
     setPinnedAnswers((prev) => prev.filter((item) => item.id !== id));
   };
+
+  const timerDisplay = `${String(Math.floor(secondsLeft / 60)).padStart(2, "0")}:${String(secondsLeft % 60).padStart(2, "0")}`;
 
   const downloadBlob = (content: string, type: string, filename: string) => {
     const blob = new Blob([content], { type });
@@ -511,6 +665,55 @@ export function App() {
     printWindow.print();
   };
 
+  const exportStudyStats = () => {
+    const payload: StudyStatsExport = {
+      exportedAt: new Date().toISOString(),
+      version: 1,
+      profile: profileStats,
+      stats: {
+        history,
+        notes,
+        activityDays,
+        completedPomodoros,
+        pomodoroLog,
+        pinnedAnswers,
+      },
+    };
+
+    downloadBlob(
+      JSON.stringify(payload, null, 2),
+      "application/json;charset=utf-8",
+      `studybox-ai-stats-${new Date().toISOString().slice(0, 10)}.json`,
+    );
+    setStatsImportStatus(`Exported stats on ${new Date(payload.exportedAt).toLocaleString()}`);
+  };
+
+  const importStudyStats = async (file: File) => {
+    try {
+      const raw = await file.text();
+      const parsed = JSON.parse(raw) as Partial<StudyStatsExport>;
+
+      if (!parsed || parsed.version !== 1 || !parsed.profile || !parsed.stats) {
+        throw new Error("This file is not a valid StudyBox-AI stats export.");
+      }
+
+      setProfileStats({ ...DEFAULT_PROFILE_STATS, ...parsed.profile });
+      setHistory(Array.isArray(parsed.stats.history) ? parsed.stats.history : []);
+      setSelectedHistoryId(parsed.stats.history?.[0]?.id ?? null);
+      setNotes(typeof parsed.stats.notes === "string" ? parsed.stats.notes : "");
+      setActivityDays(Array.isArray(parsed.stats.activityDays) ? parsed.stats.activityDays : []);
+      setCompletedPomodoros(
+        typeof parsed.stats.completedPomodoros === "number" ? parsed.stats.completedPomodoros : 0,
+      );
+      setPomodoroLog(Array.isArray(parsed.stats.pomodoroLog) ? parsed.stats.pomodoroLog : []);
+      setPinnedAnswers(Array.isArray(parsed.stats.pinnedAnswers) ? parsed.stats.pinnedAnswers : []);
+      setStatsImportStatus(`Imported stats from ${file.name}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setStatsImportStatus(`Import failed: ${message}`);
+    }
+  };
+
   if (sdkError) {
     return (
       <div className="app-loading">
@@ -537,7 +740,7 @@ export function App() {
           <div className="logo-icon">S</div>
           <div>
             <div className="logo-text">STUDYBOX-AI</div>
-            <div className="logo-version">v2.0 // ON-DEVICE AI</div>
+            <div className="logo-version">ON-DEVICE AI</div>
           </div>
         </div>
 
@@ -549,28 +752,91 @@ export function App() {
               onClick={() => setActiveTab(tab.id)}
               type="button"
             >
-              <span className="tab-icon">{tab.icon}</span>
               {tab.label}
-              <span className={`status-dot ${activeTab === tab.id ? "online" : ""}`} />
             </button>
           ))}
         </nav>
 
-        <div className="header-right">
-          <div className="model-badge">{providerMode === "local" ? "local runtime" : providerMode === "hybrid" ? "hybrid ai" : "claude ai"}</div>
-          <div className="model-badge">{currentTab.badge}</div>
-          {claudeConfigured && <div className="model-badge">claude linked</div>}
-          {accel && <div className="model-badge">{accel}</div>}
+        <div className="header-timer-shell" ref={timerPopupRef}>
+          <button
+            className={`header-timer ${pomodoroRunning ? "active" : ""}`}
+            type="button"
+            onClick={() => setTimerPopupOpen((prev) => !prev)}
+            aria-expanded={timerPopupOpen}
+          >
+            <span className="header-timer-mode">{pomodoroPreset.badge}</span>
+            <span className="header-timer-time">{timerDisplay}</span>
+          </button>
+
+          {timerPopupOpen && (
+            <div className="header-timer-popup">
+              <div className="header-timer-popup-head">
+                <span>Focus timer</span>
+                <span>{pomodoroPreset.label}</span>
+              </div>
+
+              <div className="header-timer-popup-body">
+                {pomodoroMode !== "work" && (
+                  <div className="pomodoro-mode-switcher header-timer-break-options">
+                    <button
+                      className={`theme-chip pomodoro-chip ${pomodoroMode === "break5" ? "active" : ""}`}
+                      onClick={() => selectPomodoroMode("break5")}
+                      type="button"
+                    >
+                      5 min
+                    </button>
+                    <button
+                      className={`theme-chip pomodoro-chip ${pomodoroMode === "break10" ? "active" : ""}`}
+                      onClick={() => selectPomodoroMode("break10")}
+                      type="button"
+                    >
+                      10 min
+                    </button>
+                  </div>
+                )}
+
+                <div className="header-timer-display">{timerDisplay}</div>
+
+                <div className="pomodoro-mode-switcher header-timer-modes">
+                  <button
+                    className={`theme-chip pomodoro-chip ${pomodoroMode === "work" ? "active" : ""}`}
+                    onClick={() => selectPomodoroMode("work")}
+                    type="button"
+                  >
+                    work
+                  </button>
+                  <button
+                    className={`theme-chip pomodoro-chip ${pomodoroMode !== "work" ? "active" : ""}`}
+                    onClick={() => selectPomodoroMode("break5")}
+                    type="button"
+                  >
+                    break
+                  </button>
+                </div>
+
+                <div className="header-timer-actions">
+                  <button className="btn primary" type="button" onClick={() => setPomodoroRunning((prev) => !prev)}>
+                    {pomodoroRunning ? "Pause" : "Start"}
+                  </button>
+                  <button className="btn pink" type="button" onClick={endPomodoro}>End</button>
+                </div>
+
+                <div className="pomodoro-meta">
+                  <span>{Math.round(pomodoroPreset.seconds / 60)} min session | {completedPomodoros} completed pomodoros</span>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
+
       </header>
 
       <div className="hero-strip">
-        <div>
+        <div className="hero-copy">
           <div className="hero-eyebrow">{currentTab.eyebrow}</div>
           <div className="hero-title">
-            STUDYBOX <span className="glitch">AI</span>
+            {currentTab.title} <span>{currentTab.accent}</span>
           </div>
-          <div className="hero-sub">// offline - fast - local</div>
         </div>
 
         <div className="hero-stats">
@@ -598,250 +864,154 @@ export function App() {
         </div>
       </div>
 
-      <div className="content">
+      <div className="content full-page">
         <div className="main-stack">
-          {activeTab === "chat" && <ChatTab onHistoryEntry={addHistoryEntry} providerMode={providerMode} claude={claude} onPinAnswer={addPinnedAnswer} />}
-          {activeTab === "vision" && <VisionTab onHistoryEntry={addHistoryEntry} providerMode={providerMode} claude={claude} />}
-          {activeTab === "tools" && <ToolsTab onHistoryEntry={addHistoryEntry} />}
-          {activeTab === "voice" && <VoiceTab onHistoryEntry={addHistoryEntry} />}
+          {activeTab === "chat" && <ChatTab onHistoryEntry={addHistoryEntry} providerMode={providerMode} claude={claude} languageModelId={preferredLanguageModelId || undefined} onPinAnswer={addPinnedAnswer} />}
+          {activeTab === "vision" && <VisionTab onHistoryEntry={addHistoryEntry} providerMode={providerMode} claude={claude} visionModelId={preferredVisionModelId || undefined} />}
+          {activeTab === "voice" && <VoiceTab onHistoryEntry={addHistoryEntry} languageModelId={preferredLanguageModelId || undefined} />}
           {activeTab === "notes" && (
             <SmartNotesTab
               history={history}
               selectedHistory={selectedHistory}
               notes={notes}
+              languageModelId={preferredLanguageModelId || undefined}
               onNotesChange={setNotes}
             />
           )}
           {activeTab === "flashcards" && (
-            <FlashcardsTab history={history} selectedHistory={selectedHistory} notes={notes} />
+            <FlashcardsTab history={history} selectedHistory={selectedHistory} notes={notes} languageModelId={preferredLanguageModelId || undefined} />
+          )}
+          {activeTab === "quiz" && (
+            <QuizTab
+              history={history}
+              selectedHistory={selectedHistory}
+              notes={notes}
+              languageModelId={preferredLanguageModelId || undefined}
+              onHistoryEntry={addHistoryEntry}
+            />
           )}
           {activeTab === "map" && (
-            <ConceptMapTab history={history} selectedHistory={selectedHistory} notes={notes} />
+            <ConceptMapTab history={history} selectedHistory={selectedHistory} notes={notes} languageModelId={preferredLanguageModelId || undefined} />
           )}
-        </div>
-
-        <aside className="info-stack">
-          <div className="info-block">
-            <div className="info-block-head">
-              <span>Pomodoro</span>
-              <span>{pomodoroPreset.badge}</span>
-            </div>
-            <div className="info-block-body pomodoro-body">
-              <div className="pomodoro-mode-switcher">
-                {(["work", "short", "long"] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    className={`theme-chip pomodoro-chip ${pomodoroMode === mode ? "active" : ""}`}
-                    onClick={() => selectPomodoroMode(mode)}
-                    type="button"
-                  >
-                    {POMODORO_PRESETS[mode].badge}
-                  </button>
-                ))}
+          {activeTab === "profile" && (
+            <ProfileTab
+              profile={profileStats}
+              streak={streak}
+              xp={xp}
+              historyCount={history.length}
+              completedPomodoros={completedPomodoros}
+              calendar={studyCalendar}
+              unlockedAchievements={unlockedAchievementIds}
+              onExportStats={exportStudyStats}
+              onImportStats={importStudyStats}
+              importStatus={statsImportStatus}
+            />
+          )}
+          {activeTab === "settings" && (
+            <SettingsTab
+              theme={theme}
+              themes={[...themes]}
+              onThemeChange={(value) => setTheme(value as (typeof themes)[number]["id"])}
+              providerMode={providerMode}
+              onProviderModeChange={setProviderMode}
+              claudeApiKey={claudeApiKey}
+              onClaudeApiKeyChange={setClaudeApiKey}
+              claudeModel={claudeModel}
+              claudeModels={[...claudeModels]}
+              onClaudeModelChange={(value) => setClaudeModel(value as (typeof claudeModels)[number]["id"])}
+              preferredLanguageModelId={preferredLanguageModelId}
+              onPreferredLanguageModelChange={setPreferredLanguageModelId}
+              preferredVisionModelId={preferredVisionModelId}
+              onPreferredVisionModelChange={setPreferredVisionModelId}
+              accelerationMode={accelerationMode}
+            />
+          )}
+          <section className="support-grid">
+            <div className="info-block">
+              <div className="info-block-head">
+                <span>Pinned answers</span>
+                <span>{pinnedAnswers.length} saved</span>
               </div>
-              <div className="pomodoro-time">
-                {String(Math.floor(secondsLeft / 60)).padStart(2, "0")}:
-                {String(secondsLeft % 60).padStart(2, "0")}
-              </div>
-              <div className="pomodoro-label">{pomodoroPreset.label}</div>
-              <div className="pomodoro-actions">
-                <button className="btn primary" type="button" onClick={() => setPomodoroRunning((prev) => !prev)}>
-                  {pomodoroRunning ? "Pause" : "Start"}
-                </button>
-                <button className="btn" type="button" onClick={resetPomodoro}>Reset</button>
-                <button className="btn" type="button" onClick={skipPomodoro}>Skip</button>
-              </div>
-              <div className="pomodoro-meta">
-                <span>{completedPomodoros} completed pomodoros</span>
-                <span>{Math.round(pomodoroPreset.seconds / 60)} min session</span>
-              </div>
-              <div className="session-log">
-                {pomodoroLog.length === 0 && <p className="history-empty">No sessions logged yet.</p>}
-                {pomodoroLog.map((session) => (
-                  <div key={session.id} className="session-item">
-                    <span className={`session-dot ${session.label === "Focus Session" ? "work" : "break"}`} />
-                    <span>{session.label}</span>
-                    <span className="session-time">{new Date(session.completedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="info-block">
-            <div className="info-block-head">
-              <span>Study streak</span>
-              <span>{streak} days</span>
-            </div>
-            <div className="info-block-body">
-              <div className="streak-grid">
-                <div className="streak-stat">
-                  <strong>{xp}</strong>
-                  <span>XP</span>
-                </div>
-                <div className="streak-stat">
-                  <strong>{history.length}</strong>
-                  <span>Entries</span>
-                </div>
-                <div className="streak-stat">
-                  <strong>{completedPomodoros}</strong>
-                  <span>Focus Blocks</span>
-                </div>
-              </div>
-              <div className="achievement-wall">
-                {achievements.map((achievement) => (
-                  <div key={achievement.label} className={`achievement-chip ${achievement.unlocked ? "active" : ""}`}>
-                    {achievement.label}
-                  </div>
-                ))}
-              </div>
-              <div className="calendar-grid">
-                {studyCalendar.map((day) => (
-                  <div
-                    key={day.key}
-                    className={`calendar-day ${day.studied ? "active" : ""} ${day.today ? "today" : ""}`}
-                    title={day.key}
-                  >
-                    {day.dayNumber}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="info-block">
-            <div className="info-block-head">
-              <span>Pinned answers</span>
-              <span>{pinnedAnswers.length} saved</span>
-            </div>
-            <div className="info-block-body pinned-list">
-              {pinnedAnswers.length === 0 && (
-                <p className="history-empty">Pin AI answers from chat and they will stay here for quick review.</p>
-              )}
-              {pinnedAnswers.map((item) => (
-                <div key={item.id} className="pinned-item">
-                  <button className="pinned-remove" onClick={() => removePinnedAnswer(item.id)} type="button">Remove</button>
-                  <div className="history-preview-label">Prompt</div>
-                  <p className="pinned-question">{item.prompt}</p>
-                  <div className="history-preview-label">Answer</div>
-                  <p className="pinned-answer">{item.response}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="info-block">
-            <div className="info-block-head">
-              <span>Theme</span>
-              <span>{theme}</span>
-            </div>
-            <div className="info-block-body theme-switcher">
-              {themes.map((themeOption) => (
-                <button
-                  key={themeOption.id}
-                  className={`theme-chip ${theme === themeOption.id ? "active" : ""}`}
-                  onClick={() => setTheme(themeOption.id)}
-                  type="button"
-                >
-                  {themeOption.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="info-block">
-            <div className="info-block-head">
-              <span>Provider</span>
-              <span>{providerMode}</span>
-            </div>
-            <div className="info-block-body provider-panel">
-              <div className="provider-switcher">
-                {(["local", "hybrid", "claude"] as const).map((mode) => (
-                  <button
-                    key={mode}
-                    className={`theme-chip ${providerMode === mode ? "active" : ""}`}
-                    onClick={() => setProviderMode(mode)}
-                    type="button"
-                  >
-                    {mode}
-                  </button>
-                ))}
-              </div>
-              <input
-                className="history-search"
-                type="password"
-                placeholder="Paste Claude API key (stored in this browser)"
-                value={claudeApiKey}
-                onChange={(e) => setClaudeApiKey(e.target.value)}
-              />
-              <select
-                className="history-search"
-                value={claudeModel}
-                onChange={(e) => setClaudeModel(e.target.value as (typeof claudeModels)[number]["id"])}
-              >
-                {claudeModels.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.label}
-                  </option>
-                ))}
-              </select>
-              <p className="provider-note">
-                VLM means vision-language model for camera and image tasks. In local mode the app downloads models to your device. Claude mode uses your API key for stronger text and image answers.
-              </p>
-            </div>
-          </div>
-
-          <div className="info-block history-block">
-            <div className="info-block-head">
-              <span>History log</span>
-              <button className="history-clear" onClick={clearHistory} type="button">Clear</button>
-            </div>
-            <div className="info-block-body history-body">
-              <input
-                className="history-search"
-                type="search"
-                placeholder="Search prompts and answers..."
-                value={historySearch}
-                onChange={(e) => setHistorySearch(e.target.value)}
-              />
-
-              <div className="history-list">
-                {filteredHistory.length === 0 && (
-                  <p className="history-empty">No history yet. Ask something and it will show up here.</p>
+              <div className="info-block-body pinned-list">
+                {pinnedAnswers.length === 0 && (
+                  <p className="history-empty">Pin AI answers from chat and they will stay here for quick review.</p>
                 )}
-                {filteredHistory.map((entry) => (
-                  <button
-                    key={entry.id}
-                    className={`history-item ${selectedHistory?.id === entry.id ? "active" : ""}`}
-                    onClick={() => setSelectedHistoryId(entry.id)}
-                    type="button"
-                  >
-                    <span className="history-source">{entry.source}</span>
-                    <span className="history-prompt">{entry.prompt}</span>
-                    <span className="history-time">{new Date(entry.createdAt).toLocaleString()}</span>
-                  </button>
+                {pinnedAnswers.map((item) => (
+                  <div key={item.id} className="pinned-item">
+                    <button className="pinned-remove" onClick={() => removePinnedAnswer(item.id)} type="button">Remove</button>
+                    <div className="history-preview-label">Prompt</div>
+                    <MarkdownContent className="pinned-question markdown-content" content={item.prompt} />
+                    <div className="history-preview-label">Answer</div>
+                    <MarkdownContent className="pinned-answer markdown-content" content={item.response} />
+                  </div>
                 ))}
               </div>
-
-              {selectedHistory && (
-                <div className="history-preview">
-                  <div className="history-actions">
-                    <button className="btn" onClick={copySelectedEntry} type="button">Copy</button>
-                    <button className="btn" onClick={shareSelectedEntry} type="button">Share</button>
-                    <button className="btn" onClick={exportSelectedAsText} type="button">Export .txt</button>
-                    <button className="btn" onClick={exportSelectedAsMarkdown} type="button">Export .md</button>
-                    <button className="btn" onClick={exportSelectedAsJson} type="button">Export .json</button>
-                    <button className="btn primary" onClick={exportSelectedAsPdf} type="button">Print / PDF</button>
-                  </div>
-                  <div className="history-preview-label">Prompt</div>
-                  <p>{selectedHistory.prompt}</p>
-                  <div className="history-preview-label">Response</div>
-                  <p>{selectedHistory.response}</p>
-                </div>
-              )}
             </div>
-          </div>
-        </aside>
+            <div className="info-block history-block">
+              <div className="info-block-head">
+                <span>History log</span>
+                <button className="history-clear" onClick={clearHistory} type="button">Clear</button>
+              </div>
+              <div className="info-block-body history-body">
+                <div className="history-filters">
+                  {historySourceOptions.map((option) => (
+                    <button
+                      key={option.id}
+                      className={`theme-chip history-chip ${historySourceFilter === option.id ? "active" : ""}`}
+                      onClick={() => setHistorySourceFilter(option.id)}
+                      type="button"
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+
+                <input
+                  className="history-search"
+                  type="search"
+                  placeholder="Search prompts and answers..."
+                  value={historySearch}
+                  onChange={(e) => setHistorySearch(e.target.value)}
+                />
+
+                <div className="history-list">
+                  {filteredHistory.length === 0 && (
+                    <p className="history-empty">No history yet. Ask something and it will show up here.</p>
+                  )}
+                  {filteredHistory.map((entry) => (
+                    <button
+                      key={entry.id}
+                      className={`history-item ${selectedHistory?.id === entry.id ? "active" : ""}`}
+                      onClick={() => setSelectedHistoryId(entry.id)}
+                      type="button"
+                    >
+                      <span className="history-source">{historySourceLabels[entry.source] ?? entry.source}</span>
+                      <span className="history-prompt">{entry.prompt}</span>
+                      <span className="history-time">{new Date(entry.createdAt).toLocaleString()}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {selectedHistory && (
+                  <div className="history-preview">
+                    <div className="history-actions">
+                      <button className="btn" onClick={copySelectedEntry} type="button">Copy</button>
+                      <button className="btn" onClick={shareSelectedEntry} type="button">Share</button>
+                      <button className="btn" onClick={exportSelectedAsText} type="button">Export .txt</button>
+                      <button className="btn" onClick={exportSelectedAsMarkdown} type="button">Export .md</button>
+                      <button className="btn" onClick={exportSelectedAsJson} type="button">Export .json</button>
+                      <button className="btn primary" onClick={exportSelectedAsPdf} type="button">Print / PDF</button>
+                    </div>
+                    <div className="history-preview-label">Prompt</div>
+                    <MarkdownContent className="markdown-content" content={selectedHistory.prompt} />
+                    <div className="history-preview-label">Response</div>
+                    <MarkdownContent className="markdown-content" content={selectedHistory.response} />
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+        </div>
       </div>
 
       <footer>

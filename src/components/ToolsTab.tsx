@@ -118,8 +118,12 @@ interface ParamDraft {
 
 const EMPTY_PARAM: ParamDraft = { name: '', type: 'string', description: '', required: true };
 
-export function ToolsTab({ onHistoryEntry }: HistoryReporter) {
-  const loader = useModelLoader(ModelCategory.Language);
+interface ToolsTabProps extends HistoryReporter {
+  languageModelId?: string;
+}
+
+export function ToolsTab({ onHistoryEntry, languageModelId }: ToolsTabProps) {
+  const loader = useModelLoader(ModelCategory.Language, false, languageModelId);
   const [input, setInput] = useState('');
   const [generating, setGenerating] = useState(false);
   const [autoExecute, setAutoExecute] = useState(true);

@@ -3,12 +3,17 @@ import { VoicePipeline, ModelCategory, ModelManager, AudioCapture, AudioPlayback
 import { VAD } from '@runanywhere/web-onnx';
 import { useModelLoader } from '../hooks/useModelLoader';
 import { ModelBanner } from './ModelBanner';
+import { MarkdownContent } from './MarkdownContent';
 import type { HistoryReporter } from '../types/history';
 
 type VoiceState = 'idle' | 'loading-models' | 'listening' | 'processing' | 'speaking';
 
-export function VoiceTab({ onHistoryEntry }: HistoryReporter) {
-  const llmLoader = useModelLoader(ModelCategory.Language, true);
+interface VoiceTabProps extends HistoryReporter {
+  languageModelId?: string;
+}
+
+export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
+  const llmLoader = useModelLoader(ModelCategory.Language, true, languageModelId);
   const sttLoader = useModelLoader(ModelCategory.SpeechRecognition, true);
   const ttsLoader = useModelLoader(ModelCategory.SpeechSynthesis, true);
   const vadLoader = useModelLoader(ModelCategory.Audio, true);
@@ -169,6 +174,14 @@ export function VoiceTab({ onHistoryEntry }: HistoryReporter) {
     { label: 'TTS', loader: ttsLoader },
   ].filter((l) => l.loader.state !== 'ready');
 
+  const voiceStatusLabel = (
+    voiceState === 'idle' ? 'Tap to start listening'
+      : voiceState === 'loading-models' ? 'Loading models...'
+        : voiceState === 'listening' ? 'Listening... speak now'
+          : voiceState === 'processing' ? 'Processing...'
+            : 'Speaking...'
+  );
+
   return (
     <section className="card">
       <div className="card-header">
@@ -187,6 +200,14 @@ export function VoiceTab({ onHistoryEntry }: HistoryReporter) {
       )}
 
       <div className="card-body voice-layout">
+        <div className="voice-topbar">
+          <span className={`voice-chip ${voiceState !== 'idle' ? 'active' : ''}`}>{voiceState}</span>
+          <span className="voice-chip">vad</span>
+          <span className="voice-chip">stt</span>
+          <span className="voice-chip">llm</span>
+          <span className="voice-chip">tts</span>
+        </div>
+
         {error && (
           <div className="result-panel">
             <div className="result-panel-header">Voice error</div>
@@ -196,62 +217,87 @@ export function VoiceTab({ onHistoryEntry }: HistoryReporter) {
           </div>
         )}
 
-        <div className="voice-center">
-          <div className="waveform" aria-hidden="true">
-            {Array.from({ length: 18 }).map((_, i) => (
-              <span
-                key={i}
-                className="wave-bar"
-                style={{ animationDelay: `${i * 0.08}s`, height: `${10 + Math.max(audioLevel, 0.15) * (16 + (i % 5) * 8)}px` }}
-              />
-            ))}
+        <div className="voice-grid">
+          <div className="voice-center">
+            <div className="waveform" aria-hidden="true">
+              {Array.from({ length: 18 }).map((_, i) => (
+                <span
+                  key={i}
+                  className="wave-bar"
+                  style={{ animationDelay: `${i * 0.08}s`, height: `${10 + Math.max(audioLevel, 0.15) * (16 + (i % 5) * 8)}px` }}
+                />
+              ))}
+            </div>
+
+            <div className="voice-orb-shell">
+              <div className="voice-orb" style={{ transform: `scale(${1 + audioLevel * 0.35})` }}>
+                <div className="voice-orb-inner" />
+              </div>
+            </div>
+
+            <p className="voice-status">{voiceStatusLabel}</p>
+
+            {voiceState === 'idle' || voiceState === 'loading-models' ? (
+              <button
+                className="btn primary"
+                onClick={startListening}
+                disabled={voiceState === 'loading-models'}
+                type="button"
+              >
+                Start Listening
+              </button>
+            ) : voiceState === 'listening' ? (
+              <button className="btn pink" onClick={stopListening} type="button">
+                Stop
+              </button>
+            ) : null}
           </div>
 
-          <div className="voice-orb-shell">
-            <div className="voice-orb" style={{ transform: `scale(${1 + audioLevel * 0.35})` }}>
-              <div className="voice-orb-inner" />
+          <div className="info-block voice-pipeline-block">
+            <div className="info-block-head">
+              <span>Voice pipeline</span>
+              <span>4 stages</span>
+            </div>
+            <div className="info-block-body voice-pipeline-list">
+              <div className={`voice-pipeline-step ${voiceState === 'listening' ? 'active' : ''}`}>
+                <span className="voice-pipeline-icon">Mic</span>
+                <span>detect speech</span>
+              </div>
+              <div className={`voice-pipeline-step ${voiceState === 'processing' ? 'active' : ''}`}>
+                <span className="voice-pipeline-icon">Text</span>
+                <span>transcribe</span>
+              </div>
+              <div className={`voice-pipeline-step ${voiceState === 'processing' ? 'active' : ''}`}>
+                <span className="voice-pipeline-icon">AI</span>
+                <span>generate reply</span>
+              </div>
+              <div className={`voice-pipeline-step ${voiceState === 'speaking' ? 'active' : ''}`}>
+                <span className="voice-pipeline-icon">Play</span>
+                <span>speak response</span>
+              </div>
             </div>
           </div>
-
-          <p className="voice-status">
-            {voiceState === 'idle' && 'Tap to start listening'}
-            {voiceState === 'loading-models' && 'Loading models...'}
-            {voiceState === 'listening' && 'Listening... speak now'}
-            {voiceState === 'processing' && 'Processing...'}
-            {voiceState === 'speaking' && 'Speaking...'}
-          </p>
-
-          {voiceState === 'idle' || voiceState === 'loading-models' ? (
-            <button
-              className="btn primary"
-              onClick={startListening}
-              disabled={voiceState === 'loading-models'}
-              type="button"
-            >
-              Start Listening
-            </button>
-          ) : voiceState === 'listening' ? (
-            <button className="btn pink" onClick={stopListening} type="button">
-              Stop
-            </button>
-          ) : null}
         </div>
 
-        {transcript && (
-          <div className="result-panel">
-            <div className="result-panel-header">You said</div>
-            <div className="result-panel-body">
-              <p>{transcript}</p>
-            </div>
-          </div>
-        )}
+        {(transcript || response) && (
+          <div className="voice-results-grid">
+            {transcript && (
+              <div className="result-panel">
+                <div className="result-panel-header">You said</div>
+                <div className="result-panel-body">
+                  <p>{transcript}</p>
+                </div>
+              </div>
+            )}
 
-        {response && (
-          <div className="result-panel">
-            <div className="result-panel-header">AI response</div>
-            <div className="result-panel-body">
-              <p>{response}</p>
-            </div>
+            {response && (
+              <div className="result-panel">
+                <div className="result-panel-header">AI response</div>
+                <div className="result-panel-body">
+                  <MarkdownContent className="markdown-content" content={response} />
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

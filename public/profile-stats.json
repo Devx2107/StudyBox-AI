@@ -1,0 +1,21 @@
+{
+  "userName": "Study Explorer",
+  "welcome": "Welcome back",
+  "rankLabel": "Level 8 Scholar",
+  "xpTarget": 1000,
+  "weeklyGoal": 200,
+  "weeklyHighlights": [
+    "+50 XP - Solved a study problem",
+    "+25 XP - Completed a focus block",
+    "+30 XP - Generated flashcards",
+    "+10 XP - Kept the streak alive"
+  ],
+  "achievements": [
+    { "id": "first-ask", "label": "First Ask", "description": "Start your first study session" },
+    { "id": "five-sessions", "label": "5 Sessions", "description": "Log five study entries" },
+    { "id": "three-day-streak", "label": "3-Day Streak", "description": "Study three days in a row" },
+    { "id": "pomodoro-five", "label": "Pomodoro x5", "description": "Complete five focus sessions" },
+    { "id": "deep-work", "label": "Deep Work", "description": "Reach ten focus blocks" },
+    { "id": "xp-1000", "label": "1000 XP", "description": "Cross 1000 total XP" }
+  ]
+}

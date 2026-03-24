@@ -3,6 +3,7 @@ import { ModelCategory } from '@runanywhere/web';
 import { TextGeneration } from '@runanywhere/web-llamacpp';
 import { useModelLoader } from '../hooks/useModelLoader';
 import { ModelBanner } from './ModelBanner';
+import { MarkdownContent } from './MarkdownContent';
 import type { HistoryReporter } from '../types/history';
 import { generateClaudeText, type ClaudeSettings } from '../lib/anthropic';
 
@@ -15,11 +16,12 @@ interface Message {
 interface ChatTabProps extends HistoryReporter {
   providerMode: 'local' | 'hybrid' | 'claude';
   claude: ClaudeSettings;
+  languageModelId?: string;
   onPinAnswer?: (entry: { prompt: string; response: string }) => void;
 }
 
-export function ChatTab({ onHistoryEntry, providerMode, claude, onPinAnswer }: ChatTabProps) {
-  const loader = useModelLoader(ModelCategory.Language);
+export function ChatTab({ onHistoryEntry, providerMode, claude, languageModelId, onPinAnswer }: ChatTabProps) {
+  const loader = useModelLoader(ModelCategory.Language, false, languageModelId);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [generating, setGenerating] = useState(false);
@@ -241,7 +243,7 @@ export function ChatTab({ onHistoryEntry, providerMode, claude, onPinAnswer }: C
               <div className="msg-avatar">{msg.role === 'user' ? 'You' : 'AI'}</div>
               <div className="msg-stack">
                 <div className={`msg-bubble ${msg.role === 'assistant' && !msg.text ? 'typing' : ''}`}>
-                  <p>{msg.text || '...'}</p>
+                  <MarkdownContent className="markdown-content" content={msg.text || '...'} />
                   {msg.stats && (
                     <div className="message-stats">
                       {msg.stats.summary}
