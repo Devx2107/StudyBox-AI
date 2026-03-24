@@ -80,7 +80,7 @@ export function ChatTab({ onHistoryEntry, providerMode, claude, languageModelId,
         }
 
         const { stream, result: resultPromise, cancel } = await TextGeneration.generateStream(text, {
-          maxTokens: 256,
+          maxTokens: 768,
           temperature: 0.45,
         });
         cancelRef.current = cancel;

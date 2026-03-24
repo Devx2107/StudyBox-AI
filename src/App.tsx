@@ -330,6 +330,114 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    if (!window.matchMedia("(pointer: fine)").matches) return undefined;
+
+    const mainCursor = document.createElement("div");
+    const trailCursor = document.createElement("div");
+    mainCursor.className = "nb-cursor";
+    trailCursor.className = "nb-cursor-trail";
+    document.body.appendChild(trailCursor);
+    document.body.appendChild(mainCursor);
+
+    const interactiveSelector = "button, a, input, textarea, select, [role=\"button\"], .nav-tab, .history-item, .theme-chip, .btn";
+    let targetX = -100;
+    let targetY = -100;
+    let cursorX = -100;
+    let cursorY = -100;
+    let trailX = -100;
+    let trailY = -100;
+    let frameId = 0;
+
+    const isInteractiveTarget = (target: EventTarget | null) =>
+      target instanceof Element ? target.closest(interactiveSelector) : null;
+
+    const showCursor = () => {
+      document.body.classList.add("cursor-visible");
+    };
+
+    const hideCursor = () => {
+      document.body.classList.remove("cursor-visible", "cursor-hover", "cursor-click");
+    };
+
+    const animate = () => {
+      cursorX += (targetX - cursorX) * 0.35;
+      cursorY += (targetY - cursorY) * 0.35;
+      trailX += (targetX - trailX) * 0.14;
+      trailY += (targetY - trailY) * 0.14;
+
+      mainCursor.style.transform = `translate(${cursorX}px, ${cursorY}px)`;
+      trailCursor.style.transform = `translate(${trailX}px, ${trailY}px)`;
+      frameId = window.requestAnimationFrame(animate);
+    };
+
+    const handleMouseMove = (event: MouseEvent) => {
+      targetX = event.clientX;
+      targetY = event.clientY;
+      showCursor();
+    };
+
+    const handleMouseOver = (event: MouseEvent) => {
+      if (isInteractiveTarget(event.target)) {
+        document.body.classList.add("cursor-hover");
+      }
+    };
+
+    const handleMouseOut = (event: MouseEvent) => {
+      if (!isInteractiveTarget(event.relatedTarget)) {
+        document.body.classList.remove("cursor-hover");
+      }
+    };
+
+    const handleMouseDown = () => {
+      document.body.classList.add("cursor-click");
+    };
+
+    const handleMouseUp = () => {
+      document.body.classList.remove("cursor-click");
+    };
+
+    const handleMouseLeave = () => {
+      hideCursor();
+    };
+
+    const handleWindowBlur = () => {
+      hideCursor();
+    };
+
+    const handleWindowMouseOut = (event: MouseEvent) => {
+      if (!event.relatedTarget && !event.toElement) {
+        hideCursor();
+      }
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseover", handleMouseOver);
+    document.addEventListener("mouseout", handleMouseOut);
+    window.addEventListener("mousedown", handleMouseDown);
+    window.addEventListener("mouseup", handleMouseUp);
+    window.addEventListener("mouseout", handleWindowMouseOut);
+    window.addEventListener("blur", handleWindowBlur);
+    document.addEventListener("mouseleave", handleMouseLeave);
+
+    frameId = window.requestAnimationFrame(animate);
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseover", handleMouseOver);
+      document.removeEventListener("mouseout", handleMouseOut);
+      window.removeEventListener("mousedown", handleMouseDown);
+      window.removeEventListener("mouseup", handleMouseUp);
+      window.removeEventListener("mouseout", handleWindowMouseOut);
+      window.removeEventListener("blur", handleWindowBlur);
+      document.removeEventListener("mouseleave", handleMouseLeave);
+      document.body.classList.remove("cursor-visible", "cursor-hover", "cursor-click");
+      mainCursor.remove();
+      trailCursor.remove();
+    };
+  }, []);
+
+  useEffect(() => {
     try {
       const raw = localStorage.getItem(HISTORY_STORAGE_KEY) ?? localStorage.getItem(LEGACY_HISTORY_STORAGE_KEY);
       if (!raw) return;
