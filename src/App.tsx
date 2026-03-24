@@ -95,9 +95,9 @@ const POMODORO_PRESETS: Record<PomodoroMode, { label: string; badge: string; sec
 
 const themes = [
   { id: "classic", label: "Classic" },
-  { id: "dark", label: "Dark" },
-  { id: "contrast", label: "Contrast" },
-  { id: "neon", label: "Neon" },
+  { id: "blue", label: "Blue" },
+  { id: "pink", label: "Pink" },
+  { id: "orange", label: "Orange" },
 ] as const;
 
 const claudeModels = [
@@ -264,6 +264,7 @@ export function App() {
   const timerPopupRef = useRef<HTMLDivElement | null>(null);
 
   const currentTab = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
+  const showSupportSection = activeTab !== "profile" && activeTab !== "settings" && activeTab !== "quiz";
   const accelerationMode = sdkReady ? getAccelerationMode() : null;
   const historySourceOptions = useMemo(() => {
     const presentSources = new Set(history.map((entry) => entry.source));
@@ -771,7 +772,7 @@ export function App() {
           {timerPopupOpen && (
             <div className="header-timer-popup">
               <div className="header-timer-popup-head">
-                <span>Focus timer</span>
+                <span>Pomodoro Timer</span>
                 <span>{pomodoroPreset.label}</span>
               </div>
 
@@ -926,6 +927,7 @@ export function App() {
               accelerationMode={accelerationMode}
             />
           )}
+          {showSupportSection && (
           <section className="support-grid">
             <div className="info-block">
               <div className="info-block-head">
@@ -950,22 +952,21 @@ export function App() {
             <div className="info-block history-block">
               <div className="info-block-head">
                 <span>History log</span>
-                <button className="history-clear" onClick={clearHistory} type="button">Clear</button>
-              </div>
-              <div className="info-block-body history-body">
-                <div className="history-filters">
+                <div className="history-header-tools">
                   {historySourceOptions.map((option) => (
                     <button
                       key={option.id}
-                      className={`theme-chip history-chip ${historySourceFilter === option.id ? "active" : ""}`}
+                      className={`chat-header-btn history-header-btn ${historySourceFilter === option.id ? "active" : ""}`}
                       onClick={() => setHistorySourceFilter(option.id)}
                       type="button"
                     >
                       {option.label}
                     </button>
                   ))}
+                  <button className="history-clear" onClick={clearHistory} type="button">Clear</button>
                 </div>
-
+              </div>
+              <div className="info-block-body history-body">
                 <input
                   className="history-search"
                   type="search"
@@ -1011,6 +1012,7 @@ export function App() {
               </div>
             </div>
           </section>
+          )}
         </div>
       </div>
 

@@ -202,7 +202,21 @@ export function ChatTab({ onHistoryEntry, providerMode, claude, languageModelId,
     <section className="card">
       <div className="card-header">
         <div className="card-title">Chat console</div>
-        <div className="card-badge">LLM streaming</div>
+        <div className="chat-header-tools">
+          <button className="chat-header-btn" type="button" onClick={copyConversation} disabled={!conversationText}>
+            Copy Chat
+          </button>
+          <button className="chat-header-btn" type="button" onClick={shareConversation} disabled={!conversationText}>
+            Share Chat
+          </button>
+          <button className="chat-header-btn" type="button" onClick={() => exportConversation('txt')} disabled={!conversationText}>
+            Export .txt
+          </button>
+          <button className="chat-header-btn" type="button" onClick={() => exportConversation('md')} disabled={!conversationText}>
+            Export .md
+          </button>
+          <div className="card-badge">LLM streaming</div>
+        </div>
       </div>
 
       {providerMode !== 'claude' && (
@@ -216,26 +230,11 @@ export function ChatTab({ onHistoryEntry, providerMode, claude, languageModelId,
       )}
 
       <div className="card-body">
-        <div className="chat-actions">
-          <button className="btn sm" type="button" onClick={copyConversation} disabled={!conversationText}>
-            Copy Chat
-          </button>
-          <button className="btn sm" type="button" onClick={shareConversation} disabled={!conversationText}>
-            Share Chat
-          </button>
-          <button className="btn sm" type="button" onClick={() => exportConversation('txt')} disabled={!conversationText}>
-            Export .txt
-          </button>
-          <button className="btn sm" type="button" onClick={() => exportConversation('md')} disabled={!conversationText}>
-            Export .md
-          </button>
-        </div>
-
         <div className="messages" ref={listRef}>
           {messages.length === 0 && (
             <div className="empty-state">
               <h3>Start a conversation</h3>
-              <p>Type a message below to chat with on-device AI.</p>
+              <p>Type a message below to chat with the AI.</p>
             </div>
           )}
           {messages.map((msg, i) => (

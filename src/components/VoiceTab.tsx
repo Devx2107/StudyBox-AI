@@ -12,6 +12,21 @@ interface VoiceTabProps extends HistoryReporter {
   languageModelId?: string;
 }
 
+function computeSignalLevel(samples: Float32Array) {
+  if (!samples.length) return 0;
+
+  let peak = 0;
+  let total = 0;
+  for (let index = 0; index < samples.length; index += 1) {
+    const value = Math.abs(samples[index] ?? 0);
+    peak = Math.max(peak, value);
+    total += value * value;
+  }
+
+  const rms = Math.sqrt(total / samples.length);
+  return Math.min(1, Math.max(peak * 1.8, rms * 5.5));
+}
+
 export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
   const llmLoader = useModelLoader(ModelCategory.Language, true, languageModelId);
   const sttLoader = useModelLoader(ModelCategory.SpeechRecognition, true);
@@ -27,13 +42,23 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
   const micRef = useRef<AudioCapture | null>(null);
   const pipelineRef = useRef<VoicePipeline | null>(null);
   const vadUnsub = useRef<(() => void) | null>(null);
+  const playbackAnimRef = useRef<number | null>(null);
+  const lastVisualLevelRef = useRef(0);
+
+  const stopPlaybackAnimation = useCallback(() => {
+    if (playbackAnimRef.current !== null) {
+      window.clearInterval(playbackAnimRef.current);
+      playbackAnimRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     return () => {
       micRef.current?.stop();
       vadUnsub.current?.();
+      stopPlaybackAnimation();
     };
-  }, []);
+  }, [stopPlaybackAnimation]);
 
   const ensureModels = useCallback(async (): Promise<boolean> => {
     setVoiceState('loading-models');
@@ -83,9 +108,31 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
         },
         onSynthesisComplete: async (audio, sampleRate) => {
           setVoiceState('speaking');
+          const chunkSize = Math.max(512, Math.floor(sampleRate * 0.05));
+          const envelope = Array.from({ length: Math.max(1, Math.ceil(audio.length / chunkSize)) }, (_, index) => {
+            const start = index * chunkSize;
+            const end = Math.min(start + chunkSize, audio.length);
+            return computeSignalLevel(audio.slice(start, end));
+          });
+
+          stopPlaybackAnimation();
+          let envelopeIndex = 0;
+          playbackAnimRef.current = window.setInterval(() => {
+            const rawLevel = envelope[envelopeIndex] ?? 0;
+            const nextLevel = Math.max(0.08, rawLevel);
+            lastVisualLevelRef.current = nextLevel;
+            setAudioLevel(nextLevel);
+            envelopeIndex += 1;
+            if (envelopeIndex >= envelope.length) {
+              stopPlaybackAnimation();
+            }
+          }, 50);
+
           const player = new AudioPlayback({ sampleRate });
           await player.play(audio, sampleRate);
           player.dispose();
+          stopPlaybackAnimation();
+          setAudioLevel(0);
         },
         onStateChange: (s) => {
           if (s === 'processingSTT' || s === 'generatingResponse') setVoiceState('processing');
@@ -131,6 +178,7 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
     }
 
     setVoiceState('listening');
+    lastVisualLevelRef.current = 0;
 
     const mic = new AudioCapture({ sampleRate: 16000 });
     micRef.current = mic;
@@ -153,19 +201,25 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
     await mic.start(
       (chunk) => {
         VAD.processSamples(chunk);
+        const rawLevel = computeSignalLevel(chunk);
+        const smoothedLevel = rawLevel > lastVisualLevelRef.current
+          ? rawLevel
+          : lastVisualLevelRef.current * 0.72 + rawLevel * 0.28;
+        lastVisualLevelRef.current = smoothedLevel;
+        setAudioLevel(smoothedLevel);
       },
-      (level) => {
-        setAudioLevel(level);
-      },
+      () => {},
     );
   }, [ensureModels, processSpeech]);
 
   const stopListening = useCallback(() => {
     micRef.current?.stop();
     vadUnsub.current?.();
+    stopPlaybackAnimation();
+    lastVisualLevelRef.current = 0;
     setVoiceState('idle');
     setAudioLevel(0);
-  }, []);
+  }, [stopPlaybackAnimation]);
 
   const pendingLoaders = [
     { label: 'VAD', loader: vadLoader },
@@ -175,12 +229,16 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
   ].filter((l) => l.loader.state !== 'ready');
 
   const voiceStatusLabel = (
-    voiceState === 'idle' ? 'Tap to start listening'
+    voiceState === 'idle' ? 'Stopped'
       : voiceState === 'loading-models' ? 'Loading models...'
         : voiceState === 'listening' ? 'Listening... speak now'
           : voiceState === 'processing' ? 'Processing...'
             : 'Speaking...'
   );
+
+  const visualLevel = voiceState === 'idle' || voiceState === 'loading-models'
+    ? 0
+    : audioLevel;
 
   return (
     <section className="card">
@@ -200,14 +258,6 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
       )}
 
       <div className="card-body voice-layout">
-        <div className="voice-topbar">
-          <span className={`voice-chip ${voiceState !== 'idle' ? 'active' : ''}`}>{voiceState}</span>
-          <span className="voice-chip">vad</span>
-          <span className="voice-chip">stt</span>
-          <span className="voice-chip">llm</span>
-          <span className="voice-chip">tts</span>
-        </div>
-
         {error && (
           <div className="result-panel">
             <div className="result-panel-header">Voice error</div>
@@ -224,15 +274,12 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
                 <span
                   key={i}
                   className="wave-bar"
-                  style={{ animationDelay: `${i * 0.08}s`, height: `${10 + Math.max(audioLevel, 0.15) * (16 + (i % 5) * 8)}px` }}
+                  style={{
+                    height: `${10 + visualLevel * (14 + (i % 5) * 10)}px`,
+                    opacity: voiceState === 'idle' ? 0.45 : 1,
+                  }}
                 />
               ))}
-            </div>
-
-            <div className="voice-orb-shell">
-              <div className="voice-orb" style={{ transform: `scale(${1 + audioLevel * 0.35})` }}>
-                <div className="voice-orb-inner" />
-              </div>
             </div>
 
             <p className="voice-status">{voiceStatusLabel}</p>
