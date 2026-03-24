@@ -98,6 +98,7 @@ const themes = [
   { id: "blue", label: "Blue" },
   { id: "pink", label: "Pink" },
   { id: "orange", label: "Orange" },
+  { id: "purple", label: "Purple" },
 ] as const;
 
 const claudeModels = [

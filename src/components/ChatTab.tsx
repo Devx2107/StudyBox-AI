@@ -198,6 +198,18 @@ export function ChatTab({ onHistoryEntry, providerMode, claude, languageModelId,
     onPinAnswer?.({ prompt, response: message.text });
   };
 
+  const chatBadge = providerMode === 'claude'
+    ? 'Claude mode'
+    : loader.state === 'ready'
+      ? 'LLM streaming'
+      : loader.state === 'downloading'
+        ? 'LLM downloading'
+        : loader.state === 'loading'
+          ? 'LLM loading'
+          : loader.state === 'error'
+            ? 'LLM error'
+            : 'LLM not loaded';
+
   return (
     <section className="card">
       <div className="card-header">
@@ -215,7 +227,7 @@ export function ChatTab({ onHistoryEntry, providerMode, claude, languageModelId,
           <button className="chat-header-btn" type="button" onClick={() => exportConversation('md')} disabled={!conversationText}>
             Export .md
           </button>
-          <div className="card-badge">LLM streaming</div>
+          <div className="card-badge">{chatBadge}</div>
         </div>
       </div>
 
