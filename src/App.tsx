@@ -314,6 +314,7 @@ export function App() {
   const [pomodoroLog, setPomodoroLog] = useState<PomodoroSession[]>([]);
   const [pomodoroMusic, setPomodoroMusic] = useState<PomodoroMusicState>(DEFAULT_POMODORO_MUSIC_STATE);
   const [timerPopupOpen, setTimerPopupOpen] = useState(false);
+  const hasHydratedUserDataRef = useRef(false);
   const timerPopupRef = useRef<HTMLDivElement | null>(null);
   const pomodoroAudioRefs = useRef<Partial<Record<PomodoroMusicSource, HTMLAudioElement>>>({});
   const lastTrackBySourceRef = useRef<Partial<Record<PomodoroMusicSource, string>>>({});
@@ -351,7 +352,7 @@ export function App() {
     ? MUSIC_TRACKS[pomodoroMusic.selectedSource]
     : [];
   const achievements = [
-    { id: "first-ask", label: "First Ask", unlocked: totalStudyEntries >= 1 },
+    { id: "first-ask", label: "First Session", unlocked: totalStudyEntries >= 1 },
     { id: "five-sessions", label: "5 Sessions", unlocked: totalStudyEntries >= 5 },
     { id: "three-day-streak", label: "3-Day Streak", unlocked: streak >= 3 },
     { id: "pomodoro-five", label: "Pomodoro x5", unlocked: completedPomodoros >= 5 },
@@ -738,6 +739,7 @@ export function App() {
     let cancelled = false;
     void loadUserData().then((data) => {
       if (cancelled) return;
+      hasHydratedUserDataRef.current = true;
 
       // Profile
       setProfileStats({
@@ -810,6 +812,7 @@ export function App() {
   }, [totalChatMessages, totalQuizzesDone, totalFlashcardGenerations, totalVoiceMessages, totalVisionScans]);
 
   useEffect(() => {
+    if (!hasHydratedUserDataRef.current) return;
     saveUserData({
       userName: profileStats.userName,
       welcome: profileStats.welcome,

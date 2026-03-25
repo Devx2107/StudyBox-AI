@@ -88,7 +88,7 @@ export const DEFAULT_USERDATA: UserData = {
   xpTarget: 1000,
   weeklyGoal: 200,
   achievements: [
-    { id: 'first-ask',        label: 'First Ask',     description: 'Start your first study session' },
+    { id: 'first-ask',        label: 'First Session',     description: 'Start your first study session' },
     { id: 'five-sessions',    label: '5 Sessions',    description: 'Log five study entries' },
     { id: 'three-day-streak', label: '3-Day Streak',  description: 'Study three days in a row' },
     { id: 'pomodoro-five',    label: 'Pomodoro x5',   description: 'Complete five focus sessions' },
@@ -121,6 +121,10 @@ export const DEFAULT_USERDATA: UserData = {
   xpUpdates: [],
 };
 
+const DEFAULT_ACHIEVEMENTS_BY_ID = new Map(
+  DEFAULT_USERDATA.achievements.map((achievement) => [achievement.id, achievement]),
+);
+
 function calculateTotalXp(stats: {
   totalChatMessages: number;
   totalQuizzesDone: number;
@@ -149,6 +153,23 @@ export async function loadUserData(): Promise<UserData> {
     const res = await fetch(`${DATA_FILE}?_=${Date.now()}`, { cache: 'no-store' });
     if (!res.ok) return { ...DEFAULT_USERDATA };
     const raw = await res.json() as Partial<UserData>;
+    const achievements = Array.isArray(raw.achievements)
+      ? raw.achievements
+        .filter((achievement): achievement is UserData['achievements'][number] => (
+          Boolean(achievement)
+          && typeof achievement.id === 'string'
+        ))
+        .map((achievement) => {
+          const canonical = DEFAULT_ACHIEVEMENTS_BY_ID.get(achievement.id);
+          return canonical
+            ? { ...canonical }
+            : {
+                id: achievement.id,
+                label: typeof achievement.label === 'string' ? achievement.label : achievement.id,
+                description: typeof achievement.description === 'string' ? achievement.description : '',
+              };
+        })
+      : DEFAULT_USERDATA.achievements;
     const history = Array.isArray(raw.history) ? raw.history : DEFAULT_USERDATA.history;
     const completedPomodoros = typeof raw.completedPomodoros === 'number'
       ? raw.completedPomodoros
@@ -185,6 +206,7 @@ export async function loadUserData(): Promise<UserData> {
     return {
       ...DEFAULT_USERDATA,
       ...raw,
+      achievements,
       history,
       completedPomodoros,
       xpUpdates,

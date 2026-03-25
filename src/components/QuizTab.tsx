@@ -22,6 +22,16 @@ interface QuizPayload {
   questions: QuizQuestion[];
 }
 
+interface RawQuizQuestion {
+  question?: unknown;
+  options?: unknown;
+  answerIndex?: unknown;
+  explanation?: unknown;
+  answer?: unknown;
+  correctAnswer?: unknown;
+  correctOption?: unknown;
+}
+
 interface QuizTabProps extends HistoryReporter {
   history: HistoryEntry[];
   selectedHistory: HistoryEntry | null;
@@ -29,16 +39,128 @@ interface QuizTabProps extends HistoryReporter {
   languageModelId?: string;
 }
 
+interface SanitizedQuizQuestion {
+  question: string;
+  options: string[];
+  answerIndex: number | null;
+  explanation: string;
+}
+
+function normalizeAnswerValue(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^[a-d][).:\s-]+/, '')
+    .replace(/^option\s+[a-d][:\s-]*/i, '')
+    .replace(/^answer\s*[:\-]\s*/i, '')
+    .replace(/^correct\s+answer\s*[:\-]\s*/i, '')
+    .replace(/^the\s+correct\s+answer\s+is\s*/i, '')
+    .replace(/\s+/g, ' ');
+}
+
+function repairJsonCandidate(candidate: string) {
+  return candidate
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/,\s*([}\]])/g, '$1')
+    .trim();
+}
+
+function parseNumericIndex(value: unknown) {
+  if (typeof value === 'number' && Number.isInteger(value)) return value;
+  if (typeof value === 'string' && /^\d+$/.test(value.trim())) {
+    return Number(value.trim());
+  }
+  return null;
+}
+
+function parseLetterIndex(value: unknown) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim().toUpperCase();
+  if (/^[A-D]$/.test(trimmed)) return trimmed.charCodeAt(0) - 65;
+  const match = trimmed.match(/(?:OPTION\s+)?([A-D])(?:[).:\s-]|$)/);
+  return match ? match[1].charCodeAt(0) - 65 : null;
+}
+
+function matchAnswerText(options: string[], value: unknown) {
+  if (typeof value !== 'string') return null;
+  const normalized = normalizeAnswerValue(value);
+  if (!normalized) return null;
+
+  const exactIndex = options.findIndex((option) => normalizeAnswerValue(option) === normalized);
+  if (exactIndex >= 0) return exactIndex;
+
+  const containsIndex = options.findIndex((option) => {
+    const normalizedOption = normalizeAnswerValue(option);
+    return normalizedOption.includes(normalized) || normalized.includes(normalizedOption);
+  });
+
+  return containsIndex >= 0 ? containsIndex : null;
+}
+
+function resolveAnswerIndex(question: RawQuizQuestion, options: string[]) {
+  const answerTextIndex = matchAnswerText(
+    options,
+    typeof question.correctAnswer === 'string'
+      ? question.correctAnswer
+      : typeof question.answer === 'string'
+        ? question.answer
+        : typeof question.correctOption === 'string'
+          ? question.correctOption
+          : null,
+  );
+
+  const explanationIndex = matchAnswerText(options, question.explanation);
+  const letterIndex = parseLetterIndex(question.correctOption) ?? parseLetterIndex(question.answer);
+  const numericIndex = parseNumericIndex(question.answerIndex);
+
+  if (answerTextIndex !== null) return answerTextIndex;
+  if (letterIndex !== null && letterIndex >= 0 && letterIndex < options.length) return letterIndex;
+
+  if (numericIndex !== null) {
+    if (numericIndex >= 0 && numericIndex < options.length) {
+      return numericIndex;
+    }
+    if (numericIndex >= 1 && numericIndex <= options.length) {
+      return numericIndex - 1;
+    }
+  }
+
+  if (explanationIndex !== null) return explanationIndex;
+  return null;
+}
+
 function sanitizeQuiz(payload: QuizPayload, requestedCount: number): QuizPayload | null {
   const questions = payload.questions
-    .filter((question) => question.question && Array.isArray(question.options) && question.options.length >= 4)
-    .map((question) => ({
-      question: question.question.trim(),
-      options: question.options.slice(0, 4).map((option) => option.trim()).filter(Boolean),
-      answerIndex: Number(question.answerIndex),
-      explanation: question.explanation?.trim() || '',
-    }))
-    .filter((question) => question.options.length === 4 && question.answerIndex >= 0 && question.answerIndex < question.options.length)
+    .filter((question) => {
+      const candidate = question as RawQuizQuestion;
+      return typeof candidate.question === 'string'
+        && Array.isArray(candidate.options)
+        && candidate.options.length >= 4;
+    })
+    .map((question): SanitizedQuizQuestion => {
+      const candidate = question as RawQuizQuestion;
+      const rawOptions = candidate.options as unknown[];
+      const options = rawOptions
+        .slice(0, 4)
+        .filter((option): option is string => typeof option === 'string')
+        .map((option) => option.trim())
+        .filter(Boolean);
+      const answerIndex = resolveAnswerIndex(candidate, options);
+
+      return {
+        question: (candidate.question as string).trim(),
+        options,
+        answerIndex,
+        explanation: typeof candidate.explanation === 'string' ? candidate.explanation.trim() : '',
+      };
+    })
+    .filter((question): question is QuizQuestion => (
+      question.options.length === 4
+      && question.answerIndex !== null
+      && question.answerIndex >= 0
+      && question.answerIndex < question.options.length
+    ))
     .slice(0, requestedCount);
 
   if (questions.length < 3) return null;
@@ -52,12 +174,15 @@ function sanitizeQuiz(payload: QuizPayload, requestedCount: number): QuizPayload
 function parseQuiz(raw: string, requestedCount: number): QuizPayload | null {
   for (const candidate of extractJsonCandidates(raw)) {
     try {
-      const parsed = JSON.parse(candidate) as QuizPayload | QuizQuestion[];
+      const parsed = JSON.parse(repairJsonCandidate(candidate)) as QuizPayload | QuizQuestion[] | { title?: string; questions?: QuizQuestion[]; items?: QuizQuestion[] };
       if (Array.isArray(parsed)) {
         return sanitizeQuiz({ title: 'Quiz session', questions: parsed }, requestedCount);
       }
       if (parsed && typeof parsed === 'object' && Array.isArray(parsed.questions)) {
-        return sanitizeQuiz(parsed, requestedCount);
+        return sanitizeQuiz({ title: parsed.title ?? 'Quiz session', questions: parsed.questions }, requestedCount);
+      }
+      if (parsed && typeof parsed === 'object' && 'items' in parsed && Array.isArray(parsed.items)) {
+        return sanitizeQuiz({ title: parsed.title ?? 'Quiz session', questions: parsed.items }, requestedCount);
       }
     } catch {
       // keep trying
@@ -178,21 +303,21 @@ export function QuizTab({ history, selectedHistory, notes, languageModelId, onHi
       }
 
       const { stream, result } = await TextGeneration.generateStream(
-        `Create a ${difficulty} multiple-choice quiz from the study material below.
-Return only JSON using this shape:
-{"title":"topic","questions":[{"question":"...","options":["A","B","C","D"],"answerIndex":1,"explanation":"short explanation"}]}
-Rules:
-- generate exactly ${questionCount} questions
-- each question must have 4 options
-- keep answer explanations short and useful
-- avoid trick questions
-- keep wording clear for study review
+        `Create exactly ${questionCount} ${difficulty} multiple-choice quiz questions from this study material.
+Return JSON only.
+Use this shape:
+{"title":"topic","questions":[{"question":"...","options":["...","...","...","..."],"answerIndex":0,"explanation":"short explanation"}]}
+Requirements:
+- 4 options per question
+- answerIndex must be 0, 1, 2, or 3
+- keep wording clear
+- keep explanations short
 
 Study material:
 ${sourceText}`,
         {
-          maxTokens: questionCount <= 5 ? 1200 : questionCount <= 10 ? 2200 : 3600,
-          temperature: 0.35,
+          maxTokens: questionCount <= 5 ? 900 : questionCount <= 10 ? 1800 : 2800,
+          temperature: 0.25,
         },
       );
 
@@ -298,6 +423,7 @@ ${sourceText}`,
               <div className="quiz-meta">
                 <span>Topic: {quiz.title}</span>
                 <span>Score: {score}/{quiz.questions.length}</span>
+                <span>Accuracy: {accuracy}</span>
               </div>
 
               <div className="quiz-score-bar">
@@ -340,7 +466,7 @@ ${sourceText}`,
                 <button className="btn primary" type="button" onClick={goToNext} disabled={!revealed}>
                   {quiz && currentIndex === quiz.questions.length - 1 ? 'See results' : 'Next question'}
                 </button>
-                <button className="btn" type="button" onClick={restartQuiz} disabled={!quiz}>
+                <button className="btn primary quiz-toolbar-end" type="button" onClick={restartQuiz} disabled={!quiz}>
                   Restart
                 </button>
               </div>
@@ -349,10 +475,12 @@ ${sourceText}`,
             <div className="quiz-result">
               <div className="quiz-result-score">{score}/{quiz.questions.length}</div>
               <div className="quiz-result-label">{getResultLabel(score, quiz.questions.length)}</div>
-              <p className="study-hint">Accuracy {quiz.questions.length ? Math.round((score / quiz.questions.length) * 100) : 0}% across this session.</p>
+              <p className="study-hint">
+                Correct {correctCount} of {quiz.questions.length} with {quiz.questions.length ? Math.round((score / quiz.questions.length) * 100) : 0}% accuracy.
+              </p>
               <div className="study-toolbar">
                 <button className="btn primary" type="button" onClick={restartQuiz}>Retry quiz</button>
-                <button className="btn" type="button" onClick={generateQuiz} disabled={busy || !sourceText.trim()}>
+                <button className="btn primary" type="button" onClick={generateQuiz} disabled={busy || !sourceText.trim()}>
                   {busy ? 'Generating...' : 'Generate new quiz'}
                 </button>
               </div>
@@ -368,10 +496,25 @@ ${sourceText}`,
         <div className="info-stack">
           <div className="info-block">
             <div className="info-block-head">
-              <span>Generate quiz</span>
+              <span>Quiz source</span>
               <span>{questionCount} questions</span>
             </div>
             <div className="info-block-body quiz-side-body">
+              <div className="deck-list">
+                <button className="deck-item" type="button" onClick={useSelectedSource} disabled={!selectedHistory}>
+                  <span className="deck-name">Selected entry</span>
+                  <span className="deck-count">{selectedHistory ? 'ready' : 'empty'}</span>
+                </button>
+                <button className="deck-item" type="button" onClick={useNotesSource} disabled={!notes.trim()}>
+                  <span className="deck-name">Notes</span>
+                  <span className="deck-count">{notes.trim() ? 'ready' : 'empty'}</span>
+                </button>
+                <button className="deck-item" type="button" onClick={useRecentHistory} disabled={!history.length}>
+                  <span className="deck-name">Recent history</span>
+                  <span className="deck-count">{history.length} entries</span>
+                </button>
+              </div>
+
               <textarea
                 className="study-textarea study-textarea-sm"
                 value={sourceText}
@@ -387,9 +530,9 @@ ${sourceText}`,
                     ariaLabel="Question count"
                     onChange={(nextValue) => setQuestionCount(Number(nextValue))}
                     options={[
+                      { value: '3', label: '3 Questions' },
                       { value: '5', label: '5 Questions' },
                       { value: '10', label: '10 Questions' },
-                      { value: '20', label: '20 Questions' },
                     ]}
                   />
                 </label>
@@ -409,37 +552,10 @@ ${sourceText}`,
                 </label>
               </div>
 
-              <div className="study-toolbar">
-                <button className="btn" type="button" onClick={useSelectedSource} disabled={!selectedHistory}>
-                  Use selected history
-                </button>
-                <button className="btn" type="button" onClick={useNotesSource} disabled={!notes.trim()}>
-                  Use notes
-                </button>
-                <button className="btn" type="button" onClick={useRecentHistory} disabled={!history.length}>
-                  Use recent history
-                </button>
-              </div>
-
               <button className="btn primary full" type="button" onClick={generateQuiz} disabled={busy || !sourceText.trim()}>
                 {busy ? 'Generating...' : 'Start quiz'}
               </button>
               {generationMessage && <p className="error-text">{generationMessage}</p>}
-            </div>
-          </div>
-
-          <div className="info-block">
-            <div className="info-block-head">
-              <span>This session</span>
-              <span>{accuracy}</span>
-            </div>
-            <div className="info-block-body">
-              <ul className="feat-list">
-                <li>Correct: <strong>{correctCount}</strong></li>
-                <li>Wrong: <strong>{wrongCount}</strong></li>
-                <li>Accuracy: <strong>{accuracy}</strong></li>
-                <li>Streak: <strong>{currentStreak}</strong> in a row</li>
-              </ul>
             </div>
           </div>
         </div>

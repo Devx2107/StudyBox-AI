@@ -1948,6 +1948,10 @@ footer {
   gap: 0.75rem;
 }
 
+.quiz-toolbar-end {
+  margin-left: auto;
+}
+
 .study-hint {
   font-family: var(--mono);
   font-size: 10px;
@@ -2308,10 +2312,13 @@ footer {
 
 .quiz-result {
   border: var(--border);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow);
   background: linear-gradient(180deg, rgba(255, 230, 0, 0.12), rgba(255, 45, 120, 0.08));
   text-align: center;
   padding: 2rem 1rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 .quiz-result-score {
@@ -2330,6 +2337,15 @@ footer {
   text-transform: uppercase;
   margin-top: 0.25rem;
   margin-bottom: 0.75rem;
+}
+
+.quiz-result .study-hint {
+  max-width: 28rem;
+}
+
+.quiz-result .study-toolbar {
+  justify-content: center;
+  margin-top: 1rem;
 }
 
 .quiz-controls {
@@ -2389,7 +2405,15 @@ footer {
 }
 
 .profile-activity-grid {
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+  height: 100%;
+  grid-auto-rows: 1fr;
+  align-content: stretch;
+}
+
+.profile-activity-grid .streak-stat {
+  justify-content: center;
 }
 
 .flashcard-meta,
@@ -2983,25 +3007,55 @@ footer {
 
 .profile-layout {
   display: grid;
-  grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.1fr) minmax(260px, 0.9fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1.25rem;
-  align-items: start;
-}
-
-.profile-column {
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
+  align-items: stretch;
 }
 
 .profile-hero {
   background: var(--black);
   border: var(--border);
-  box-shadow: var(--shadow-xl);
+  box-shadow: var(--shadow);
   padding: 1.75rem 1.25rem;
   text-align: center;
   position: relative;
   overflow: hidden;
+}
+
+.profile-panel {
+  min-width: 0;
+}
+
+.profile-panel-xp,
+.profile-panel-activity,
+.profile-panel-achievements {
+  display: flex;
+  flex-direction: column;
+}
+
+.profile-panel-xp .info-block-body,
+.profile-panel-activity .info-block-body,
+.profile-panel-achievements .info-block-body,
+.profile-panel-calendar .info-block-body {
+  flex: 1;
+}
+
+.profile-panel-activity .info-block-body {
+  display: flex;
+  align-items: stretch;
+}
+
+.profile-panel-hero {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.profile-panel-calendar {
+  grid-column: 1 / 3;
+  width: calc(100% + 5px);
+  justify-self: start;
 }
 
 .profile-hero::before {
@@ -3113,6 +3167,7 @@ footer {
   display: flex;
   flex-direction: column;
   gap: 0.55rem;
+  margin-top: 0.5rem;
 }
 
 .profile-xp-update {
@@ -3142,6 +3197,7 @@ footer {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.75rem;
+  align-content: start;
 }
 
 .profile-achievement-card {
@@ -3731,6 +3787,10 @@ body[data-theme='purple'] {
     grid-template-columns: 1fr;
   }
 
+  .profile-panel-calendar {
+    grid-column: auto;
+  }
+
   .profile-achievements {
     grid-template-columns: 1fr;
   }
@@ -3744,6 +3804,15 @@ body[data-theme='purple'] {
 }
 
 /* Profile Name Edit Styles */
+.profile-name-row {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 4.5rem;
+  margin-top: 0.45rem;
+}
+
 .profile-name-display {
   position: relative;
   display: inline-flex;
@@ -3752,6 +3821,7 @@ body[data-theme='purple'] {
   cursor: pointer;
   transition: opacity 0.2s ease;
   padding: 0 1.5rem;
+  max-width: min(100%, 34rem);
 }
 
 .profile-name-display:hover .edit-icon {
@@ -3775,18 +3845,18 @@ body[data-theme='purple'] {
 
 .profile-name-input {
   font-family: var(--display);
-  font-size: 42px;
+  font-size: clamp(36px, 5vw, 64px);
   color: var(--white);
   background: rgba(255, 255, 255, 0.05);
-  border: 1px dashed var(--border);
+  border: 2px dashed rgba(255, 255, 255, 0.28);
   border-radius: 4px;
-  padding: 0 0.5rem;
-  margin: -1px -0.5rem;
-  width: 100%;
-  max-width: 300px;
+  padding: 0.1rem 0.75rem;
+  width: min(100%, 34rem);
   outline: none;
-  line-height: 1.2;
+  line-height: 0.95;
   text-align: center;
+  display: block;
+  margin: 0 auto;
 }
 
 .profile-name-input:focus {

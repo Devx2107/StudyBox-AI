@@ -55,10 +55,37 @@ export function ProfileTab({
 
   return (
     <section className="profile-layout">
-      <div className="profile-column">
-        <div className="profile-hero">
-          <span className="profile-hero-icon">S</span>
-          <div className="profile-welcome">{profile.welcome}</div>
+      <div className="info-block profile-panel profile-panel-xp">
+        <div className="info-block-head">
+          <span>Total XP</span>
+          <span>{xp} XP</span>
+        </div>
+        <div className="info-block-body profile-section-body">
+          <div className="profile-xp-meta">
+            <span>{profile.rankLabel}</span>
+            <span>{xpToNext} to next target</span>
+          </div>
+          <div className="profile-xp-bar">
+            <div className="profile-xp-fill" style={{ width: `${levelProgress}%` }} />
+          </div>
+          <div className="profile-xp-stream">
+            {xpUpdates.length === 0 && (
+              <div className="profile-xp-update empty">No XP updates yet.</div>
+            )}
+            {xpUpdates.map((update) => (
+              <div key={update.id} className="profile-xp-update">
+                <span>{update.label}</span>
+                <strong>+{update.amount} XP</strong>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="profile-hero profile-panel profile-panel-hero">
+        <span className="profile-hero-icon">S</span>
+        <div className="profile-welcome">{profile.welcome}</div>
+        <div className="profile-name-row">
           {isEditingName ? (
             <input
               className="profile-name-input"
@@ -93,62 +120,12 @@ export function ProfileTab({
               </svg>
             </div>
           )}
-          <div className="profile-rank">{profile.rankLabel}</div>
-          <div className="profile-streak-copy">{streak} day streak active</div>
         </div>
-
-        <div className="info-block">
-          <div className="info-block-head">
-            <span>Total XP</span>
-            <span>{xp} XP</span>
-          </div>
-          <div className="info-block-body profile-section-body">
-            <div className="profile-xp-meta">
-              <span>{profile.rankLabel}</span>
-              <span>{xpToNext} to next target</span>
-            </div>
-            <div className="profile-xp-bar">
-              <div className="profile-xp-fill" style={{ width: `${levelProgress}%` }} />
-            </div>
-            <div className="profile-xp-stream">
-              {xpUpdates.length === 0 && (
-                <div className="profile-xp-update empty">No XP updates yet.</div>
-              )}
-              {xpUpdates.map((update) => (
-                <div key={update.id} className="profile-xp-update">
-                  <span>{update.label}</span>
-                  <strong>+{update.amount} XP</strong>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+        <div className="profile-rank">{profile.rankLabel}</div>
+        <div className="profile-streak-copy">{streak} day streak active</div>
       </div>
 
-      <div className="info-block">
-        <div className="info-block-head">
-          <span>Achievements</span>
-          <span>{unlockedAchievements.length}/{profile.achievements.length}</span>
-        </div>
-        <div className="info-block-body">
-          <div className="profile-achievements">
-            {profile.achievements.map((achievement) => {
-              const unlocked = unlockedAchievements.includes(achievement.id);
-              return (
-                <div
-                  key={achievement.id}
-                  className={`profile-achievement-card ${unlocked ? 'active' : 'locked'}`}
-                >
-                  <div className="profile-achievement-label">{achievement.label}</div>
-                  <div className="profile-achievement-desc">{achievement.description}</div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-
-      <div className="info-block">
+      <div className="info-block profile-panel profile-panel-activity">
         <div className="info-block-head">
           <span>Activity stats</span>
           <span>lifetime</span>
@@ -175,31 +152,20 @@ export function ProfileTab({
               <strong>{activityStats.visionScans}</strong>
               <span>Vision Scans</span>
             </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="info-block">
-        <div className="info-block-head">
-          <span>{currentMonth}</span>
-          <span>Study calendar</span>
-        </div>
-        <div className="info-block-body">
-          <div className="streak-grid profile-stat-grid">
-            <div className="streak-stat">
-              <strong>{xp}</strong>
-              <span>Total XP</span>
-            </div>
-            <div className="streak-stat">
-              <strong>{historyCount}</strong>
-              <span>Study Entries</span>
-            </div>
             <div className="streak-stat">
               <strong>{completedPomodoros}</strong>
               <span>Focus Blocks</span>
             </div>
           </div>
+        </div>
+      </div>
 
+      <div className="info-block profile-panel profile-panel-calendar">
+        <div className="info-block-head">
+          <span>{currentMonth}</span>
+          <span>Study calendar</span>
+        </div>
+        <div className="info-block-body">
           <div className="calendar-grid profile-calendar-grid">
             {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d, i) => (
               <div key={`header-${i}`} className="calendar-day-header">{d}</div>
@@ -213,6 +179,29 @@ export function ProfileTab({
                   title={day.key}
                 >
                   {day.dayNumber}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div className="info-block profile-panel profile-panel-achievements">
+        <div className="info-block-head">
+          <span>Achievements</span>
+          <span>{unlockedAchievements.length}/{profile.achievements.length}</span>
+        </div>
+        <div className="info-block-body">
+          <div className="profile-achievements">
+            {profile.achievements.map((achievement) => {
+              const unlocked = unlockedAchievements.includes(achievement.id);
+              return (
+                <div
+                  key={achievement.id}
+                  className={`profile-achievement-card ${unlocked ? 'active' : 'locked'}`}
+                >
+                  <div className="profile-achievement-label">{achievement.label}</div>
+                  <div className="profile-achievement-desc">{achievement.description}</div>
                 </div>
               );
             })}

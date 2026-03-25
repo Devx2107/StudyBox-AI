@@ -5,7 +5,7 @@
   "xpTarget": 1000,
   "weeklyGoal": 200,
   "achievements": [
-    { "id": "first-ask",        "label": "First Ask",      "description": "Start your first study session" },
+    { "id": "first-ask",        "label": "First Session",      "description": "Start your first study session" },
     { "id": "five-sessions",    "label": "5 Sessions",     "description": "Log five study entries" },
     { "id": "three-day-streak", "label": "3-Day Streak",   "description": "Study three days in a row" },
     { "id": "pomodoro-five",    "label": "Pomodoro x5",    "description": "Complete five focus sessions" },
