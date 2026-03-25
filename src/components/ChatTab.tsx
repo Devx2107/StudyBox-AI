@@ -24,10 +24,17 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
   const [generating, setGenerating] = useState(false);
   const cancelRef = useRef<(() => void) | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages]);
+
+  useEffect(() => {
+    if (!generating) {
+      inputRef.current?.focus();
+    }
+  }, [generating]);
 
   const setAssistantMessage = useCallback((assistantIdx: number, message: Message) => {
     setMessages((prev) => {
@@ -42,6 +49,7 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
     if (!text || generating) return;
 
     setInput('');
+    inputRef.current?.focus();
     setMessages((prev) => [...prev, { role: 'user', text }]);
     setGenerating(true);
 
@@ -246,12 +254,12 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
           }}
         >
           <input
+            ref={inputRef}
             className="chat-input"
             type="text"
             placeholder="Message the model..."
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            disabled={generating}
           />
           {generating ? (
             <button type="button" className="send-btn" onClick={handleCancel}>

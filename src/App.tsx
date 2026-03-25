@@ -845,14 +845,22 @@ export function App() {
     markActivity(dayKeyFromIso(createdAt));
   };
 
+  const removePinnedAnswersForHistoryEntry = useCallback((entry: HistoryEntry) => {
+    setPinnedAnswers((prev) => prev.filter((item) => (
+      item.prompt !== entry.prompt || item.response !== entry.response
+    )));
+  }, []);
+
   const clearHistory = () => {
     setHistory([]);
     setSelectedHistoryId(null);
+    setPinnedAnswers([]);
   };
 
   const removeSelectedHistory = () => {
     if (!selectedHistory) return;
 
+    removePinnedAnswersForHistoryEntry(selectedHistory);
     setHistory((prev) => {
       const next = prev.filter((entry) => entry.id !== selectedHistory.id);
       setSelectedHistoryId(next[0]?.id ?? null);
