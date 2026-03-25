@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ModelCategory } from '@runanywhere/web';
+import { ModelCategory, ModelManager } from '@runanywhere/web';
 import { TextGeneration } from '@runanywhere/web-llamacpp';
 import { useModelLoader } from '../hooks/useModelLoader';
 import { ModelBanner } from './ModelBanner';
 import { MarkdownContent } from './MarkdownContent';
+import { collectStudyFragments, extractJsonCandidates } from '../lib/studyOutput';
 import type { HistoryEntry } from '../types/history';
 
 interface MapNode {
@@ -36,55 +37,143 @@ interface ConceptMapTabProps {
   languageModelId?: string;
 }
 
-function sanitizeConceptMap(map: ConceptMap): ConceptMap {
-  const nodes = map.nodes
-    .filter((node) => node.id && node.label)
+interface MapNodeInput {
+  id?: string;
+  label?: string;
+  name?: string;
+  title?: string;
+  detail?: string;
+  description?: string;
+  summary?: string;
+}
+
+interface MapEdgeInput {
+  from?: string;
+  to?: string;
+  source?: string;
+  target?: string;
+}
+
+interface ConceptMapInput {
+  title?: string;
+  topic?: string;
+  nodes?: MapNodeInput[];
+  concepts?: MapNodeInput[];
+  edges?: MapEdgeInput[];
+  relationships?: MapEdgeInput[];
+}
+
+function parseLooseJson<T>(candidate: string): T | null {
+  try {
+    return JSON.parse(candidate) as T;
+  } catch {
+    const normalized = candidate
+      .replace(/[“”]/g, '"')
+      .replace(/[‘’]/g, "'")
+      .replace(/,\s*([}\]])/g, '$1');
+
+    try {
+      return JSON.parse(normalized) as T;
+    } catch {
+      return null;
+    }
+  }
+}
+
+function sanitizeConceptMap(map: ConceptMapInput): ConceptMap {
+  const rawNodes = Array.isArray(map.nodes)
+    ? map.nodes
+    : Array.isArray(map.concepts)
+      ? map.concepts
+      : [];
+  const seenIds = new Set<string>();
+  const nodes = rawNodes
+    .filter((node) => node.label || node.name || node.title)
     .slice(0, 8)
-    .map((node) => ({
-      id: node.id,
-      label: node.label.trim(),
-      detail: node.detail?.trim() || node.label.trim(),
-    }));
+    .map((node, index) => {
+      const fallbackId = index === 0 ? 'root' : `n${index + 1}`;
+      const normalizedId = node.id?.trim() || fallbackId;
+      const id = seenIds.has(normalizedId) ? fallbackId : normalizedId;
+      const label = node.label?.trim() || node.name?.trim() || node.title?.trim() || fallbackId;
+      seenIds.add(id);
+      return {
+        id,
+        label,
+        detail: node.detail?.trim() || node.description?.trim() || node.summary?.trim() || label,
+      };
+    });
 
   const validIds = new Set(nodes.map((node) => node.id));
-  const edges = map.edges
+  const rawEdges = Array.isArray(map.edges)
+    ? map.edges
+    : Array.isArray(map.relationships)
+      ? map.relationships
+      : [];
+  const edges = rawEdges
+    .map((edge) => ({
+      from: edge.from?.trim() || edge.source?.trim() || '',
+      to: edge.to?.trim() || edge.target?.trim() || '',
+    }))
     .filter((edge) => validIds.has(edge.from) && validIds.has(edge.to) && edge.from !== edge.to)
     .slice(0, 12);
+  const normalizedEdges = edges.length || nodes.length <= 1
+    ? edges
+    : nodes.slice(1).map((node) => ({ from: nodes[0].id, to: node.id }));
 
   return {
-    title: map.title?.trim() || 'Concept map',
+    title: map.title?.trim() || map.topic?.trim() || nodes[0]?.label || 'Concept map',
     nodes,
-    edges,
+    edges: normalizedEdges,
   };
 }
 
 function parseConceptMap(raw: string): ConceptMap | null {
-  const jsonMatch = raw.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) return null;
-
-  try {
-    const parsed = JSON.parse(jsonMatch[0]) as ConceptMap;
-    if (!parsed.title || !Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) {
-      return null;
+  for (const candidate of extractJsonCandidates(raw)) {
+    const parsed = parseLooseJson<ConceptMapInput>(candidate);
+    if (!parsed) {
+      continue;
     }
     const sanitized = sanitizeConceptMap(parsed);
-    return sanitized.nodes.length >= 3 ? sanitized : null;
-  } catch {
-    return null;
+    if (sanitized.nodes.length >= 3) {
+      return sanitized;
+    }
   }
+
+  const lines = raw
+    .split(/\n+/)
+    .map((line) => line.replace(/^[-*]\s*/, '').replace(/^\d+[.)]\s*/, '').trim())
+    .filter(Boolean);
+  if (lines.length >= 3) {
+    const title = lines[0];
+    const nodes: MapNode[] = [
+      { id: 'root', label: title.slice(0, 28), detail: title },
+      ...lines.slice(1, 6).map((line, index) => ({
+        id: `n${index + 1}`,
+        label: line.slice(0, 28),
+        detail: line,
+      })),
+    ];
+    return {
+      title,
+      nodes,
+      edges: nodes.slice(1).map((node) => ({ from: 'root', to: node.id })),
+    };
+  }
+
+  return null;
 }
 
 function buildFallbackMap(sourceText: string): ConceptMap {
-  const fragments = sourceText
-    .split(/\n+/)
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .slice(0, 6);
+  const fragments = collectStudyFragments(sourceText, 6);
 
   const title = fragments[0]?.slice(0, 48) || 'Study topic';
+  const supportingFragments = fragments.slice(1, 6);
+  while (supportingFragments.length < 2) {
+    supportingFragments.push(`Key point ${supportingFragments.length + 1} from the study material`);
+  }
   const nodes: MapNode[] = [
     { id: 'root', label: title, detail: title },
-    ...fragments.slice(1, 6).map((fragment, index) => ({
+    ...supportingFragments.map((fragment, index) => ({
       id: `n${index + 1}`,
       label: fragment.slice(0, 28),
       detail: fragment,
@@ -120,10 +209,18 @@ function positionConceptMap(map: ConceptMap): PositionedNode[] {
 }
 
 export function ConceptMapTab({ history, selectedHistory, notes, languageModelId }: ConceptMapTabProps) {
-  const loader = useModelLoader(ModelCategory.Language, false, languageModelId);
+  const preferredMapModelId = useMemo(() => {
+    if (languageModelId) return languageModelId;
+
+    return ModelManager.getModels()
+      .filter((model) => model.modality === ModelCategory.Language)
+      .sort((a, b) => (b.memoryRequirement ?? 0) - (a.memoryRequirement ?? 0))[0]?.id;
+  }, [languageModelId]);
+  const loader = useModelLoader(ModelCategory.Language, false, preferredMapModelId);
   const [busy, setBusy] = useState(false);
   const [map, setMap] = useState<ConceptMap | null>(null);
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
+  const [generationMessage, setGenerationMessage] = useState<string | null>(null);
   const seedText = useMemo(() => {
     if (selectedHistory) return `Prompt: ${selectedHistory.prompt}\nResponse: ${selectedHistory.response}`;
     if (notes.trim()) return notes;
@@ -133,7 +230,7 @@ export function ConceptMapTab({ history, selectedHistory, notes, languageModelId
   const previousSeedRef = useRef(seedText);
 
   useEffect(() => {
-    if (!sourceText.trim() || sourceText === previousSeedRef.current) {
+    if (sourceText === previousSeedRef.current) {
       setSourceText(seedText);
     }
     previousSeedRef.current = seedText;
@@ -156,23 +253,34 @@ export function ConceptMapTab({ history, selectedHistory, notes, languageModelId
   const generateMap = async () => {
     if (!sourceText.trim() || busy) return;
 
-    if (loader.state !== 'ready') {
-      const ok = await loader.ensure();
-      if (!ok) return;
-    }
-
     setBusy(true);
+    setGenerationMessage(null);
     try {
+      if (loader.state !== 'ready') {
+        const ok = await loader.ensure();
+        if (!ok) {
+          const fallbackMap = buildFallbackMap(sourceText);
+          setMap(fallbackMap);
+          setActiveNodeId(fallbackMap.nodes[0]?.id ?? null);
+          setGenerationMessage(loader.error || 'AI model could not be loaded, so a fallback concept map was created from your source text.');
+          return;
+        }
+      }
+
       const { stream, result } = await TextGeneration.generateStream(
-        `Build a concept map from this study material. Return only JSON using this shape:
+        `Create a study concept map for the topic or material below.
+If the input is short, like "quadratic equations", expand it into the main ideas a student should study.
+Return valid JSON only. Do not use markdown fences or extra commentary.
+Use this shape:
 {"title":"topic","nodes":[{"id":"root","label":"Topic","detail":"summary"},{"id":"n2","label":"Idea","detail":"why it matters"}],"edges":[{"from":"root","to":"n2"}]}
 Rules:
 - create 5 to 7 nodes
 - keep labels short
 - connect every node with meaningful edges
 - the first node should be the main topic
-\n\n${sourceText}`,
-        { maxTokens: 420, temperature: 0.25 },
+\n\nTopic or study material:
+${sourceText}`,
+        { maxTokens: 900, temperature: 0.25 },
       );
 
       let accumulated = '';
@@ -180,9 +288,19 @@ Rules:
         accumulated += token;
       }
       const final = (await result).text || accumulated;
-      const nextMap = parseConceptMap(final) ?? buildFallbackMap(sourceText);
+      const parsedMap = parseConceptMap(final);
+      const nextMap = parsedMap ?? buildFallbackMap(sourceText);
       setMap(nextMap);
       setActiveNodeId(nextMap.nodes[0]?.id ?? null);
+      if (!parsedMap) {
+        setGenerationMessage('The AI response was incomplete, so a fallback concept map was created from your source text.');
+      }
+    } catch (error) {
+      const fallbackMap = buildFallbackMap(sourceText);
+      const message = error instanceof Error ? error.message : String(error);
+      setMap(fallbackMap);
+      setActiveNodeId(fallbackMap.nodes[0]?.id ?? null);
+      setGenerationMessage(`AI generation failed, so a fallback concept map was created. ${message}`);
     } finally {
       setBusy(false);
     }
@@ -250,13 +368,6 @@ Rules:
                   </button>
                 ))}
               </div>
-
-              <div className="study-toolbar">
-                <button className="btn primary" type="button" onClick={generateMap} disabled={busy || !sourceText.trim()}>
-                  {busy ? 'Building...' : 'Generate concept map'}
-                </button>
-                <button className="btn" type="button" onClick={resetMap}>Reset map</button>
-              </div>
             </>
           ) : (
             <div className="empty-state">
@@ -264,6 +375,15 @@ Rules:
               <p>Generate a visual concept map from notes, chat history, or selected study material.</p>
             </div>
           )}
+
+          <div className="study-toolbar">
+            <button className="btn primary" type="button" onClick={generateMap} disabled={busy || !sourceText.trim()}>
+              {busy ? 'Building...' : 'Generate concept map'}
+            </button>
+            {map && (
+              <button className="btn" type="button" onClick={resetMap}>Reset map</button>
+            )}
+          </div>
         </div>
 
         <div className="info-stack">
@@ -291,6 +411,11 @@ Rules:
                   Use recent history
                 </button>
               </div>
+
+              <button className="btn primary full" type="button" onClick={generateMap} disabled={busy || !sourceText.trim()}>
+                {busy ? 'Building...' : 'Generate concept map'}
+              </button>
+              {generationMessage && <p className="error-text">{generationMessage}</p>}
             </div>
           </div>
 

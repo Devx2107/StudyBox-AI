@@ -109,6 +109,8 @@ const historySourceLabels: Record<HistorySource, string> = {
 };
 
 const DEFAULT_PROFILE_STATS = DEFAULT_USERDATA;
+const XP_PER_HISTORY_ENTRY = 10;
+const XP_PER_POMODORO = 25;
 
 
 function toSafeFilename(value: string) {
@@ -208,20 +210,41 @@ function dateFromDayKey(dayKey: string) {
   return new Date(year, month - 1, day);
 }
 
-function getStreak(days: string[]) {
-  if (!days.length) return 0;
-  const sorted = [...new Set(days)].sort((a, b) => b.localeCompare(a));
-  let streak = 1;
-  let cursor = dateFromDayKey(sorted[0]);
+function isDayKey(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  return dayKeyFromDate(dateFromDayKey(value)) === value;
+}
 
-  for (let i = 1; i < sorted.length; i += 1) {
-    const expected = new Date(cursor);
-    expected.setDate(expected.getDate() - 1);
-    const expectedKey = dayKeyFromDate(expected);
-    if (sorted[i] !== expectedKey) break;
+function normalizeActivityDays(days: string[], today = new Date()) {
+  const todayKey = dayKeyFromDate(today);
+  return [...new Set(days.filter((day) => isDayKey(day) && day <= todayKey))]
+    .sort((a, b) => b.localeCompare(a));
+}
+
+function getStreak(days: string[], today = new Date()) {
+  const normalizedDays = normalizeActivityDays(days, today);
+  if (!normalizedDays.length) return 0;
+
+  const todayKey = dayKeyFromDate(today);
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayKey = dayKeyFromDate(yesterday);
+  const daySet = new Set(normalizedDays);
+  const startKey = daySet.has(todayKey)
+    ? todayKey
+    : daySet.has(yesterdayKey)
+      ? yesterdayKey
+      : null;
+
+  if (!startKey) return 0;
+
+  let streak = 0;
+  const cursor = dateFromDayKey(startKey);
+  while (daySet.has(dayKeyFromDate(cursor))) {
     streak += 1;
-    cursor = expected;
+    cursor.setDate(cursor.getDate() - 1);
   }
+
   return streak;
 }
 
@@ -259,6 +282,13 @@ export function App() {
   const [notes, setNotes] = useState("");
   const [activityDays, setActivityDays] = useState<string[]>([]);
   const [completedPomodoros, setCompletedPomodoros] = useState(0);
+  const [totalStudyEntries, setTotalStudyEntries] = useState(0);
+  const [totalXp, setTotalXp] = useState(0);
+  const [totalChatMessages, setTotalChatMessages] = useState(0);
+  const [totalQuizzesDone, setTotalQuizzesDone] = useState(0);
+  const [totalCardsGenerated, setTotalCardsGenerated] = useState(0);
+  const [totalVoiceMessages, setTotalVoiceMessages] = useState(0);
+  const [totalVisionScans, setTotalVisionScans] = useState(0);
   const [pomodoroMode, setPomodoroMode] = useState<PomodoroMode>("work");
   const [secondsLeft, setSecondsLeft] = useState(POMODORO_PRESETS.work.seconds);
   const [pomodoroRunning, setPomodoroRunning] = useState(false);
@@ -294,15 +324,16 @@ export function App() {
   const selectedHistory = filteredHistory.find((entry) => entry.id === selectedHistoryId)
     ?? filteredHistory[0]
     ?? null;
-  const streak = useMemo(() => getStreak(activityDays), [activityDays]);
-  const xp = history.length * 10 + completedPomodoros * 25;
+  const normalizedActivityDays = useMemo(() => normalizeActivityDays(activityDays), [activityDays]);
+  const streak = useMemo(() => getStreak(normalizedActivityDays), [normalizedActivityDays]);
+  const xp = totalXp;
   const pomodoroPreset = POMODORO_PRESETS[pomodoroMode];
   const selectedPomodoroMusicTracks = pomodoroMusic.selectedSource
     ? MUSIC_TRACKS[pomodoroMusic.selectedSource]
     : [];
   const achievements = [
-    { id: "first-ask", label: "First Ask", unlocked: history.length >= 1 },
-    { id: "five-sessions", label: "5 Sessions", unlocked: history.length >= 5 },
+    { id: "first-ask", label: "First Ask", unlocked: totalStudyEntries >= 1 },
+    { id: "five-sessions", label: "5 Sessions", unlocked: totalStudyEntries >= 5 },
     { id: "three-day-streak", label: "3-Day Streak", unlocked: streak >= 3 },
     { id: "pomodoro-five", label: "Pomodoro x5", unlocked: completedPomodoros >= 5 },
     { id: "deep-work", label: "Deep Work", unlocked: completedPomodoros >= 10 },
@@ -325,12 +356,12 @@ export function App() {
       return {
         key,
         dayNumber,
-        studied: activityDays.includes(key),
+        studied: normalizedActivityDays.includes(key),
         today: key === todayKey,
       };
     });
     return [...leadingEmptyDays, ...monthDays];
-  }, [activityDays]);
+  }, [normalizedActivityDays]);
 
   useEffect(() => {
     const sourceEntries = (["lofi", "rain"] as const).map((source) => {
@@ -723,12 +754,19 @@ export function App() {
       }
       setPomodoroLog(data.pomodoroLog);
       setCompletedPomodoros(data.completedPomodoros);
+      setTotalStudyEntries(data.totalStudyEntries);
+      setTotalXp(data.totalXp);
+      setTotalChatMessages(data.totalChatMessages);
+      setTotalQuizzesDone(data.totalQuizzesDone);
+      setTotalCardsGenerated(data.totalCardsGenerated);
+      setTotalVoiceMessages(data.totalVoiceMessages);
+      setTotalVisionScans(data.totalVisionScans);
 
       // User data
       setHistory(data.history as HistoryEntry[]);
       setSelectedHistoryId(data.history[0]?.id ?? null);
       setNotes(data.notes);
-      setActivityDays(data.activityDays);
+      setActivityDays(normalizeActivityDays(data.activityDays));
       setPinnedAnswers(data.pinnedAnswers);
     });
     return () => { cancelled = true; };
@@ -760,8 +798,15 @@ export function App() {
       pomodoroMode,
       pomodoroSecondsLeft: secondsLeft,
       history,
+      totalStudyEntries,
+      totalXp,
+      totalChatMessages,
+      totalQuizzesDone,
+      totalCardsGenerated,
+      totalVoiceMessages,
+      totalVisionScans,
       notes,
-      activityDays,
+      activityDays: normalizedActivityDays,
       completedPomodoros,
       pomodoroLog,
       pinnedAnswers,
@@ -772,7 +817,9 @@ export function App() {
     preferredLanguageModelId, preferredVisionModelId,
     pomodoroMusic.selectedSource, pomodoroMusic.volume,
     pomodoroMode, secondsLeft,
-    history, notes, activityDays, completedPomodoros, pomodoroLog, pinnedAnswers,
+    history, totalStudyEntries, totalXp,
+    totalChatMessages, totalQuizzesDone, totalCardsGenerated, totalVoiceMessages, totalVisionScans,
+    notes, normalizedActivityDays, completedPomodoros, pomodoroLog, pinnedAnswers,
   ]);
 
 
@@ -816,9 +863,10 @@ export function App() {
 
     if (finishedMode === "work") {
       setCompletedPomodoros((prev) => prev + 1);
+      setTotalXp((prev) => prev + XP_PER_POMODORO);
       setActivityDays((prev) => {
         const today = dayKeyFromDate(new Date());
-        return prev.includes(today) ? prev : [today, ...prev];
+        return normalizeActivityDays([today, ...prev]);
       });
       setPomodoroMode("break5");
       setSecondsLeft(POMODORO_PRESETS.break5.seconds);
@@ -829,7 +877,7 @@ export function App() {
   }, [secondsLeft, pomodoroMode]);
 
   const markActivity = (day: string) => {
-    setActivityDays((prev) => (prev.includes(day) ? prev : [day, ...prev]));
+    setActivityDays((prev) => normalizeActivityDays([day, ...prev]));
   };
 
   const addHistoryEntry = (entry: Omit<HistoryEntry, "id" | "createdAt">) => {
@@ -842,6 +890,12 @@ export function App() {
 
     setHistory((prev) => [nextEntry, ...prev].slice(0, 100));
     setSelectedHistoryId(nextEntry.id);
+    setTotalStudyEntries((prev) => prev + 1);
+    setTotalXp((prev) => prev + XP_PER_HISTORY_ENTRY);
+    if (entry.source === "chat") setTotalChatMessages((prev) => prev + 1);
+    if (entry.source === "quiz") setTotalQuizzesDone((prev) => prev + 1);
+    if (entry.source === "voice") setTotalVoiceMessages((prev) => prev + 1);
+    if (entry.source === "vision") setTotalVisionScans((prev) => prev + 1);
     markActivity(dayKeyFromIso(createdAt));
   };
 
@@ -1197,7 +1251,13 @@ export function App() {
             />
           )}
           {activeTab === "flashcards" && (
-            <FlashcardsTab history={history} selectedHistory={selectedHistory} notes={notes} languageModelId={preferredLanguageModelId || undefined} />
+            <FlashcardsTab
+              history={history}
+              selectedHistory={selectedHistory}
+              notes={notes}
+              languageModelId={preferredLanguageModelId || undefined}
+              onCardsGenerated={(count) => setTotalCardsGenerated((prev) => prev + count)}
+            />
           )}
           {activeTab === "quiz" && (
             <QuizTab
@@ -1218,6 +1278,13 @@ export function App() {
               xp={xp}
               historyCount={history.length}
               completedPomodoros={completedPomodoros}
+              activityStats={{
+                chatMessages: totalChatMessages,
+                quizzesDone: totalQuizzesDone,
+                cardsGenerated: totalCardsGenerated,
+                voiceMessages: totalVoiceMessages,
+                visionScans: totalVisionScans,
+              }}
               calendar={studyCalendar}
               unlockedAchievements={unlockedAchievementIds}
               onUpdateUserName={(name) => setProfileStats((prev) => ({ ...prev, userName: name }))}

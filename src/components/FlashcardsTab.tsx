@@ -4,6 +4,7 @@ import { TextGeneration } from '@runanywhere/web-llamacpp';
 import { useModelLoader } from '../hooks/useModelLoader';
 import { ModelBanner } from './ModelBanner';
 import { MarkdownContent } from './MarkdownContent';
+import { collectStudyFragments, extractJsonCandidates } from '../lib/studyOutput';
 import type { HistoryEntry } from '../types/history';
 
 interface Flashcard {
@@ -16,16 +17,24 @@ interface FlashcardsTabProps {
   selectedHistory: HistoryEntry | null;
   notes: string;
   languageModelId?: string;
+  onCardsGenerated?: (count: number) => void;
 }
 
 function parseFlashcards(raw: string): Flashcard[] {
-  const jsonMatch = raw.match(/\[[\s\S]*\]/);
-  if (jsonMatch) {
+  for (const candidate of extractJsonCandidates(raw)) {
     try {
-      const parsed = JSON.parse(jsonMatch[0]) as Flashcard[];
-      return parsed.filter((card) => card.front && card.back).slice(0, 8);
+      const parsed = JSON.parse(candidate) as Flashcard[];
+      if (Array.isArray(parsed)) {
+        return parsed
+          .filter((card) => card.front && card.back)
+          .map((card) => ({
+            front: card.front.trim(),
+            back: card.back.trim(),
+          }))
+          .slice(0, 8);
+      }
     } catch {
-      // fall through to text parsing
+      // keep trying the next candidate
     }
   }
 
@@ -42,13 +51,32 @@ function parseFlashcards(raw: string): Flashcard[] {
     .slice(0, 8);
 }
 
-export function FlashcardsTab({ history, selectedHistory, notes, languageModelId }: FlashcardsTabProps) {
+function buildFallbackFlashcards(sourceText: string): Flashcard[] {
+  const fragments = collectStudyFragments(sourceText, 8);
+  const fallbackFragments = fragments.length
+    ? fragments
+    : [sourceText.trim() || 'Review the study material.'];
+  const count = Math.min(Math.max(fallbackFragments.length, 3), 8);
+
+  return Array.from({ length: count }, (_, index) => {
+    const fragment = fallbackFragments[index % fallbackFragments.length];
+    return {
+      front: index === 0
+        ? 'What is the main idea from this study material?'
+        : `What should you remember about point ${index + 1}?`,
+      back: fragment,
+    };
+  });
+}
+
+export function FlashcardsTab({ history, selectedHistory, notes, languageModelId, onCardsGenerated }: FlashcardsTabProps) {
   const loader = useModelLoader(ModelCategory.Language, false, languageModelId);
   const [cards, setCards] = useState<Flashcard[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   const [busy, setBusy] = useState(false);
   const [masteredIndexes, setMasteredIndexes] = useState<number[]>([]);
+  const [generationMessage, setGenerationMessage] = useState<string | null>(null);
   const defaultSource = useMemo(() => {
     if (selectedHistory) {
       return `Prompt: ${selectedHistory.prompt}\nResponse: ${selectedHistory.response}`;
@@ -60,7 +88,7 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
   const previousDefaultRef = useRef(defaultSource);
 
   useEffect(() => {
-    if (!sourceText.trim() || sourceText === previousDefaultRef.current) {
+    if (sourceText === previousDefaultRef.current) {
       setSourceText(defaultSource);
     }
     previousDefaultRef.current = defaultSource;
@@ -83,16 +111,25 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
   const generateCards = async () => {
     if (!sourceText.trim() || busy) return;
 
-    if (loader.state !== 'ready') {
-      const ok = await loader.ensure();
-      if (!ok) return;
-    }
-
     setBusy(true);
+    setGenerationMessage(null);
     try {
+      if (loader.state !== 'ready') {
+        const ok = await loader.ensure();
+        if (!ok) {
+          const fallbackCards = buildFallbackFlashcards(sourceText);
+          setCards(fallbackCards);
+          setActiveIndex(0);
+          setIsFlipped(false);
+          setMasteredIndexes([]);
+          setGenerationMessage(loader.error || 'AI model could not be loaded, so a fallback deck was created from your source text.');
+          return;
+        }
+      }
+
       const { stream, result } = await TextGeneration.generateStream(
         `Create 6 study flashcards from this material. Return only JSON in this shape: [{"front":"question","back":"answer"}]. Keep each side short.\n\n${sourceText}`,
-        { maxTokens: 320, temperature: 0.3 },
+        { maxTokens: 520, temperature: 0.3 },
       );
 
       let accumulated = '';
@@ -100,10 +137,28 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
         accumulated += token;
       }
       const final = (await result).text || accumulated;
-      setCards(parseFlashcards(final));
+      const nextCards = parseFlashcards(final);
+      if (nextCards.length) {
+        setCards(nextCards);
+        onCardsGenerated?.(nextCards.length);
+      } else {
+        const fallbackCards = buildFallbackFlashcards(sourceText);
+        setCards(fallbackCards);
+        onCardsGenerated?.(fallbackCards.length);
+        setGenerationMessage('The AI response was incomplete, so a fallback deck was created from your source text.');
+      }
       setActiveIndex(0);
       setIsFlipped(false);
       setMasteredIndexes([]);
+    } catch (error) {
+      const fallbackCards = buildFallbackFlashcards(sourceText);
+      const message = error instanceof Error ? error.message : String(error);
+      setCards(fallbackCards);
+      onCardsGenerated?.(fallbackCards.length);
+      setActiveIndex(0);
+      setIsFlipped(false);
+      setMasteredIndexes([]);
+      setGenerationMessage(`AI generation failed, so a fallback deck was created. ${message}`);
     } finally {
       setBusy(false);
     }
@@ -225,29 +280,7 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
               <button className="btn primary full" type="button" onClick={generateCards} disabled={busy || !sourceText.trim()}>
                 {busy ? 'Generating...' : 'AI generate cards'}
               </button>
-            </div>
-          </div>
-
-          <div className="info-block">
-            <div className="info-block-head">
-              <span>Deck stats</span>
-              <span>{masteredIndexes.length} mastered</span>
-            </div>
-            <div className="info-block-body">
-              <div className="streak-grid flashcards-stat-grid">
-                <div className="streak-stat">
-                  <strong>{cards.length}</strong>
-                  <span>Total Cards</span>
-                </div>
-                <div className="streak-stat">
-                  <strong>{masteredIndexes.length}</strong>
-                  <span>Mastered</span>
-                </div>
-                <div className="streak-stat">
-                  <strong>{cards.length ? activeIndex + 1 : 0}</strong>
-                  <span>Current</span>
-                </div>
-              </div>
+              {generationMessage && <p className="error-text">{generationMessage}</p>}
               <p className="study-hint">The source box stays in sync with your latest selection unless you start drafting your own material.</p>
             </div>
           </div>

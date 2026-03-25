@@ -147,6 +147,7 @@ export function SettingsTab({
             </label>
 
             <p className="provider-note">These preferences affect local chat, notes, flashcards, quizzes, concept maps, voice response generation, and vision analysis.</p>
+            <p className="provider-note">When this is left on auto, concept maps may prefer a stronger local language model for more reliable structured output.</p>
           </div>
         </div>
 

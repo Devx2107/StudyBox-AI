@@ -2025,7 +2025,7 @@ footer {
 }
 
 .card-face {
-  background: var(--black);
+  background: linear-gradient(135deg, rgba(255, 230, 0, 0.14), rgba(0, 245, 212, 0.08));
 }
 
 .card-back {
@@ -2035,22 +2035,22 @@ footer {
 
 .card-face-label {
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 2px;
   text-transform: uppercase;
-  color: #777;
+  color: #555;
 }
 
 .card-face-text {
   font-family: var(--display);
-  font-size: clamp(20px, 4vw, 32px);
-  line-height: 1.1;
-  color: var(--white);
+  font-size: clamp(26px, 5vw, 40px);
+  line-height: 1.18;
+  color: var(--black);
 }
 
 .card-face-text.markdown-content,
 .card-face-text.markdown-content p {
-  color: var(--white);
+  color: var(--black);
 }
 
 .card-back-text {
@@ -2066,7 +2066,7 @@ footer {
   font-size: 10px;
   letter-spacing: 1px;
   text-transform: uppercase;
-  color: #888;
+  color: #555;
 }
 
 .card-flip-back {
@@ -2324,6 +2324,10 @@ footer {
 
 .flashcards-stat-grid {
   margin-bottom: 1rem;
+}
+
+.profile-activity-grid {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
 }
 
 .flashcard-meta,

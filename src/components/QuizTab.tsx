@@ -5,6 +5,7 @@ import { useModelLoader } from '../hooks/useModelLoader';
 import { ModelBanner } from './ModelBanner';
 import { MarkdownContent } from './MarkdownContent';
 import { AppSelect } from './AppSelect';
+import { collectStudyFragments, extractJsonCandidates } from '../lib/studyOutput';
 import type { HistoryEntry, HistoryReporter } from '../types/history';
 
 type Difficulty = 'easy' | 'medium' | 'hard';
@@ -49,11 +50,7 @@ function sanitizeQuiz(payload: QuizPayload, requestedCount: number): QuizPayload
 }
 
 function parseQuiz(raw: string, requestedCount: number): QuizPayload | null {
-  const objectMatch = raw.match(/\{[\s\S]*\}/);
-  const arrayMatch = raw.match(/\[[\s\S]*\]/);
-  const candidates = [objectMatch?.[0], arrayMatch?.[0]].filter(Boolean) as string[];
-
-  for (const candidate of candidates) {
+  for (const candidate of extractJsonCandidates(raw)) {
     try {
       const parsed = JSON.parse(candidate) as QuizPayload | QuizQuestion[];
       if (Array.isArray(parsed)) {
@@ -71,12 +68,7 @@ function parseQuiz(raw: string, requestedCount: number): QuizPayload | null {
 }
 
 function buildFallbackQuiz(sourceText: string, requestedCount: number): QuizPayload {
-  const fragments = sourceText
-    .split(/\n+/)
-    .map((line) => line.replace(/^[-*]\s*/, '').trim())
-    .filter((line) => line.length > 12)
-    .slice(0, Math.max(requestedCount + 1, 6));
-
+  const fragments = collectStudyFragments(sourceText, Math.max(requestedCount + 2, 8));
   const title = fragments[0]?.slice(0, 40) || 'Study session';
   const pool = fragments.slice(1);
   const total = Math.min(requestedCount, Math.max(pool.length, 3));
@@ -134,9 +126,10 @@ export function QuizTab({ history, selectedHistory, notes, languageModelId, onHi
   const [wrongCount, setWrongCount] = useState(0);
   const [currentStreak, setCurrentStreak] = useState(0);
   const [quizComplete, setQuizComplete] = useState(false);
+  const [generationMessage, setGenerationMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!sourceText.trim() || sourceText === previousDefaultRef.current) {
+    if (sourceText === previousDefaultRef.current) {
       setSourceText(defaultSource);
     }
     previousDefaultRef.current = defaultSource;
@@ -170,13 +163,20 @@ export function QuizTab({ history, selectedHistory, notes, languageModelId, onHi
   const generateQuiz = async () => {
     if (!sourceText.trim() || busy) return;
 
-    if (loader.state !== 'ready') {
-      const ok = await loader.ensure();
-      if (!ok) return;
-    }
-
     setBusy(true);
+    setGenerationMessage(null);
     try {
+      if (loader.state !== 'ready') {
+        const ok = await loader.ensure();
+        if (!ok) {
+          const fallbackQuiz = buildFallbackQuiz(sourceText, questionCount);
+          setQuiz(fallbackQuiz);
+          resetSessionState();
+          setGenerationMessage(loader.error || 'AI model could not be loaded, so a fallback quiz was created from your source text.');
+          return;
+        }
+      }
+
       const { stream, result } = await TextGeneration.generateStream(
         `Create a ${difficulty} multiple-choice quiz from the study material below.
 Return only JSON using this shape:
@@ -190,7 +190,10 @@ Rules:
 
 Study material:
 ${sourceText}`,
-        { maxTokens: 1200, temperature: 0.35 },
+        {
+          maxTokens: questionCount <= 5 ? 1200 : questionCount <= 10 ? 2200 : 3600,
+          temperature: 0.35,
+        },
       );
 
       let accumulated = '';
@@ -199,9 +202,19 @@ ${sourceText}`,
       }
 
       const final = (await result).text || accumulated;
-      const nextQuiz = parseQuiz(final, questionCount) ?? buildFallbackQuiz(sourceText, questionCount);
+      const parsedQuiz = parseQuiz(final, questionCount);
+      const nextQuiz = parsedQuiz ?? buildFallbackQuiz(sourceText, questionCount);
       setQuiz(nextQuiz);
       resetSessionState();
+      if (!parsedQuiz) {
+        setGenerationMessage('The AI response was incomplete, so a fallback quiz was created from your source text.');
+      }
+    } catch (error) {
+      const fallbackQuiz = buildFallbackQuiz(sourceText, questionCount);
+      const message = error instanceof Error ? error.message : String(error);
+      setQuiz(fallbackQuiz);
+      resetSessionState();
+      setGenerationMessage(`AI generation failed, so a fallback quiz was created. ${message}`);
     } finally {
       setBusy(false);
     }
@@ -210,8 +223,13 @@ ${sourceText}`,
   const currentQuestion = quiz?.questions[currentIndex] ?? null;
   const accuracy = correctCount + wrongCount > 0
     ? `${Math.round((correctCount / (correctCount + wrongCount)) * 100)}%`
-    : '—';
-  const progressWidth = quiz ? ((quizComplete ? quiz.questions.length : currentIndex) / quiz.questions.length) * 100 : 0;
+    : '--';
+  const answeredCount = quizComplete
+    ? quiz?.questions.length ?? 0
+    : revealed
+      ? currentIndex + 1
+      : currentIndex;
+  const progressWidth = quiz ? (answeredCount / quiz.questions.length) * 100 : 0;
 
   const answerQuestion = (index: number) => {
     if (!currentQuestion || revealed) return;
@@ -406,6 +424,7 @@ ${sourceText}`,
               <button className="btn primary full" type="button" onClick={generateQuiz} disabled={busy || !sourceText.trim()}>
                 {busy ? 'Generating...' : 'Start quiz'}
               </button>
+              {generationMessage && <p className="error-text">{generationMessage}</p>}
             </div>
           </div>
 

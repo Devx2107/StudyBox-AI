@@ -22,6 +22,13 @@ interface ProfileTabProps {
   xp: number;
   historyCount: number;
   completedPomodoros: number;
+  activityStats: {
+    chatMessages: number;
+    quizzesDone: number;
+    cardsGenerated: number;
+    voiceMessages: number;
+    visionScans: number;
+  };
   calendar: Array<{ key: string; dayNumber: number; studied: boolean; today: boolean } | null>;
   unlockedAchievements: string[];
   onUpdateUserName: (name: string) => void;
@@ -33,6 +40,7 @@ export function ProfileTab({
   xp,
   historyCount,
   completedPomodoros,
+  activityStats,
   calendar,
   unlockedAchievements,
   onUpdateUserName,
@@ -89,7 +97,7 @@ export function ProfileTab({
 
         <div className="info-block">
           <div className="info-block-head">
-            <span>XP this week</span>
+            <span>Total XP</span>
             <span>{xp} XP</span>
           </div>
           <div className="info-block-body profile-section-body">
@@ -128,6 +136,37 @@ export function ProfileTab({
                 </div>
               );
             })}
+          </div>
+        </div>
+      </div>
+
+      <div className="info-block">
+        <div className="info-block-head">
+          <span>Activity stats</span>
+          <span>lifetime</span>
+        </div>
+        <div className="info-block-body">
+          <div className="streak-grid profile-activity-grid">
+            <div className="streak-stat">
+              <strong>{activityStats.chatMessages}</strong>
+              <span>Chat Messages</span>
+            </div>
+            <div className="streak-stat">
+              <strong>{activityStats.quizzesDone}</strong>
+              <span>Quizzes Done</span>
+            </div>
+            <div className="streak-stat">
+              <strong>{activityStats.cardsGenerated}</strong>
+              <span>Cards Generated</span>
+            </div>
+            <div className="streak-stat">
+              <strong>{activityStats.voiceMessages}</strong>
+              <span>Voice Messages</span>
+            </div>
+            <div className="streak-stat">
+              <strong>{activityStats.visionScans}</strong>
+              <span>Vision Scans</span>
+            </div>
           </div>
         </div>
       </div>

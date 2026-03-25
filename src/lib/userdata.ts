@@ -60,6 +60,13 @@ export interface UserData {
 
   // User data
   history: HistoryEntry[];
+  totalStudyEntries: number;
+  totalXp: number;
+  totalChatMessages: number;
+  totalQuizzesDone: number;
+  totalCardsGenerated: number;
+  totalVoiceMessages: number;
+  totalVisionScans: number;
   notes: string;
   activityDays: string[];
   completedPomodoros: number;
@@ -97,6 +104,13 @@ export const DEFAULT_USERDATA: UserData = {
   pomodoroMode: 'work',
   pomodoroSecondsLeft: 25 * 60,
   history: [],
+  totalStudyEntries: 0,
+  totalXp: 0,
+  totalChatMessages: 0,
+  totalQuizzesDone: 0,
+  totalCardsGenerated: 0,
+  totalVoiceMessages: 0,
+  totalVisionScans: 0,
   notes: '',
   activityDays: [],
   completedPomodoros: 0,
@@ -116,7 +130,39 @@ export async function loadUserData(): Promise<UserData> {
     const res = await fetch(`${DATA_FILE}?_=${Date.now()}`, { cache: 'no-store' });
     if (!res.ok) return { ...DEFAULT_USERDATA };
     const raw = await res.json() as Partial<UserData>;
-    return { ...DEFAULT_USERDATA, ...raw };
+    const history = Array.isArray(raw.history) ? raw.history : DEFAULT_USERDATA.history;
+    const completedPomodoros = typeof raw.completedPomodoros === 'number'
+      ? raw.completedPomodoros
+      : DEFAULT_USERDATA.completedPomodoros;
+    const countBySource = (source: string) => history.filter((entry) => entry.source === source).length;
+
+    return {
+      ...DEFAULT_USERDATA,
+      ...raw,
+      history,
+      completedPomodoros,
+      totalStudyEntries: typeof raw.totalStudyEntries === 'number'
+        ? raw.totalStudyEntries
+        : history.length,
+      totalXp: typeof raw.totalXp === 'number'
+        ? raw.totalXp
+        : history.length * 10 + completedPomodoros * 25,
+      totalChatMessages: typeof raw.totalChatMessages === 'number'
+        ? raw.totalChatMessages
+        : countBySource('chat'),
+      totalQuizzesDone: typeof raw.totalQuizzesDone === 'number'
+        ? raw.totalQuizzesDone
+        : countBySource('quiz'),
+      totalCardsGenerated: typeof raw.totalCardsGenerated === 'number'
+        ? raw.totalCardsGenerated
+        : 0,
+      totalVoiceMessages: typeof raw.totalVoiceMessages === 'number'
+        ? raw.totalVoiceMessages
+        : countBySource('voice'),
+      totalVisionScans: typeof raw.totalVisionScans === 'number'
+        ? raw.totalVisionScans
+        : countBySource('vision'),
+    };
   } catch {
     return { ...DEFAULT_USERDATA };
   }
