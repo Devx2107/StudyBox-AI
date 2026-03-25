@@ -22,13 +22,6 @@ export interface PinnedAnswer {
   createdAt: string;
 }
 
-export interface PomodoroSession {
-  id: string;
-  label: string;
-  minutes: number;
-  completedAt: string;
-}
-
 export interface HistoryEntry {
   id: string;
   source: string;
@@ -76,7 +69,6 @@ export interface UserData {
   notes: string;
   activityDays: string[];
   completedPomodoros: number;
-  pomodoroLog: PomodoroSession[];
   pinnedAnswers: PinnedAnswer[];
   xpUpdates: XpUpdate[];
 }
@@ -116,7 +108,6 @@ export const DEFAULT_USERDATA: UserData = {
   notes: '',
   activityDays: [],
   completedPomodoros: 0,
-  pomodoroLog: [],
   pinnedAnswers: [],
   xpUpdates: [],
 };
@@ -200,7 +191,7 @@ export async function loadUserData(): Promise<UserData> {
         && typeof update.label === 'string'
         && typeof update.amount === 'number'
         && typeof update.createdAt === 'string'
-      ))
+      )).slice(0, 4)
       : DEFAULT_USERDATA.xpUpdates;
 
     return {

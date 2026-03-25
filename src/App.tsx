@@ -39,13 +39,6 @@ interface PinnedAnswer {
   createdAt: string;
 }
 
-interface PomodoroSession {
-  id: string;
-  label: string;
-  minutes: number;
-  completedAt: string;
-}
-
 interface PomodoroMusicState {
   selectedSource: PomodoroMusicSource | null;
   activeSource: PomodoroMusicSource | null;
@@ -311,7 +304,6 @@ export function App() {
   const [pomodoroMode, setPomodoroMode] = useState<PomodoroMode>("work");
   const [secondsLeft, setSecondsLeft] = useState(POMODORO_PRESETS.work.seconds);
   const [pomodoroRunning, setPomodoroRunning] = useState(false);
-  const [pomodoroLog, setPomodoroLog] = useState<PomodoroSession[]>([]);
   const [pomodoroMusic, setPomodoroMusic] = useState<PomodoroMusicState>(DEFAULT_POMODORO_MUSIC_STATE);
   const [timerPopupOpen, setTimerPopupOpen] = useState(false);
   const hasHydratedUserDataRef = useRef(false);
@@ -360,28 +352,6 @@ export function App() {
     { id: "xp-1000", label: "1000 XP", unlocked: xp >= 1000 },
   ];
   const unlockedAchievementIds = achievements.filter((achievement) => achievement.unlocked).map((achievement) => achievement.id);
-
-  const studyCalendar = useMemo(() => {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = now.getMonth();
-    const firstDayOfWeek = new Date(year, month, 1).getDay();
-    const totalDays = new Date(year, month + 1, 0).getDate();
-    const todayKey = dayKeyFromDate(now);
-    const leadingEmptyDays = Array.from({ length: firstDayOfWeek }, () => null);
-    const monthDays = Array.from({ length: totalDays }, (_, index) => {
-      const dayNumber = index + 1;
-      const date = new Date(year, month, dayNumber);
-      const key = dayKeyFromDate(date);
-      return {
-        key,
-        dayNumber,
-        studied: normalizedActivityDays.includes(key),
-        today: key === todayKey,
-      };
-    });
-    return [...leadingEmptyDays, ...monthDays];
-  }, [normalizedActivityDays]);
 
   useEffect(() => {
     const sourceEntries = (["lofi", "rain"] as const).map((source) => {
@@ -772,7 +742,6 @@ export function App() {
         setPomodoroMode(data.pomodoroMode);
         setSecondsLeft(data.pomodoroSecondsLeft > 0 ? data.pomodoroSecondsLeft : POMODORO_PRESETS[data.pomodoroMode].seconds);
       }
-      setPomodoroLog(data.pomodoroLog);
       setCompletedPomodoros(data.completedPomodoros);
       setTotalStudyEntries(data.totalStudyEntries);
       setTotalXp(data.totalXp);
@@ -841,7 +810,6 @@ export function App() {
       notes,
       activityDays: normalizedActivityDays,
       completedPomodoros,
-      pomodoroLog,
       pinnedAnswers,
       xpUpdates,
     });
@@ -853,7 +821,7 @@ export function App() {
     pomodoroMode, secondsLeft,
     history, totalStudyEntries, totalXp,
     totalChatMessages, totalQuizzesDone, totalCardsGenerated, totalFlashcardGenerations, totalVoiceMessages, totalVisionScans,
-    notes, normalizedActivityDays, completedPomodoros, pomodoroLog, pinnedAnswers, xpUpdates,
+    notes, normalizedActivityDays, completedPomodoros, pinnedAnswers, xpUpdates,
   ]);
 
 
@@ -882,18 +850,8 @@ export function App() {
     if (secondsLeft > 0) return;
 
     const finishedMode = pomodoroMode;
-    const finishedPreset = POMODORO_PRESETS[finishedMode];
 
     setPomodoroRunning(false);
-    setPomodoroLog((prev) => [
-      {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        label: finishedPreset.label,
-        minutes: Math.round(finishedPreset.seconds / 60),
-        completedAt: new Date().toISOString(),
-      },
-      ...prev,
-    ].slice(0, 12));
 
     if (finishedMode === "work") {
       setCompletedPomodoros((prev) => prev + 1);
@@ -922,7 +880,7 @@ export function App() {
         createdAt,
       },
       ...prev,
-    ].slice(0, 24));
+    ].slice(0, 4));
   };
 
   const addHistoryEntry = (entry: Omit<HistoryEntry, "id" | "createdAt">) => {
@@ -1341,7 +1299,7 @@ export function App() {
                 visionScans: totalVisionScans,
               }}
               xpUpdates={xpUpdates.slice(0, 4)}
-              calendar={studyCalendar}
+              activityDays={normalizedActivityDays}
               unlockedAchievements={unlockedAchievementIds}
               onUpdateUserName={(name) => setProfileStats((prev) => ({ ...prev, userName: name }))}
             />
