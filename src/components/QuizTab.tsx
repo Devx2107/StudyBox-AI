@@ -346,6 +346,7 @@ ${sourceText}`,
   };
 
   const currentQuestion = quiz?.questions[currentIndex] ?? null;
+  const quizInProgress = Boolean(quiz && currentQuestion && !quizComplete);
   const accuracy = correctCount + wrongCount > 0
     ? `${Math.round((correctCount / (correctCount + wrongCount)) * 100)}%`
     : '--';
@@ -499,7 +500,7 @@ ${sourceText}`,
               <span>Quiz source</span>
               <span>{questionCount} questions</span>
             </div>
-            <div className="info-block-body quiz-side-body">
+            <div className={`info-block-body quiz-side-body ${quizInProgress ? 'quiz-side-body-obscured' : ''}`}>
               <div className="deck-list">
                 <button className="deck-item" type="button" onClick={useSelectedSource} disabled={!selectedHistory}>
                   <span className="deck-name">Selected entry</span>
