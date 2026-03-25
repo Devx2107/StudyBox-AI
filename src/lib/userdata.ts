@@ -5,8 +5,14 @@ export interface ProfileStatsConfig {
   rankLabel: string;
   xpTarget: number;
   weeklyGoal: number;
-  weeklyHighlights: string[];
   achievements: Array<{ id: string; label: string; description: string }>;
+}
+
+export interface XpUpdate {
+  id: string;
+  label: string;
+  amount: number;
+  createdAt: string;
 }
 
 export interface PinnedAnswer {
@@ -38,7 +44,6 @@ export interface UserData {
   rankLabel: string;
   xpTarget: number;
   weeklyGoal: number;
-  weeklyHighlights: string[];
   achievements: Array<{ id: string; label: string; description: string }>;
 
   // Appearance / navigation
@@ -65,6 +70,7 @@ export interface UserData {
   totalChatMessages: number;
   totalQuizzesDone: number;
   totalCardsGenerated: number;
+  totalFlashcardGenerations: number;
   totalVoiceMessages: number;
   totalVisionScans: number;
   notes: string;
@@ -72,6 +78,7 @@ export interface UserData {
   completedPomodoros: number;
   pomodoroLog: PomodoroSession[];
   pinnedAnswers: PinnedAnswer[];
+  xpUpdates: XpUpdate[];
 }
 
 export const DEFAULT_USERDATA: UserData = {
@@ -80,12 +87,6 @@ export const DEFAULT_USERDATA: UserData = {
   rankLabel: 'Scholar',
   xpTarget: 1000,
   weeklyGoal: 200,
-  weeklyHighlights: [
-    '+50 XP - Solved a study problem',
-    '+25 XP - Completed a focus block',
-    '+30 XP - Generated flashcards',
-    '+10 XP - Kept the streak alive',
-  ],
   achievements: [
     { id: 'first-ask',        label: 'First Ask',     description: 'Start your first study session' },
     { id: 'five-sessions',    label: '5 Sessions',    description: 'Log five study entries' },
@@ -109,6 +110,7 @@ export const DEFAULT_USERDATA: UserData = {
   totalChatMessages: 0,
   totalQuizzesDone: 0,
   totalCardsGenerated: 0,
+  totalFlashcardGenerations: 0,
   totalVoiceMessages: 0,
   totalVisionScans: 0,
   notes: '',
@@ -116,7 +118,24 @@ export const DEFAULT_USERDATA: UserData = {
   completedPomodoros: 0,
   pomodoroLog: [],
   pinnedAnswers: [],
+  xpUpdates: [],
 };
+
+function calculateTotalXp(stats: {
+  totalChatMessages: number;
+  totalQuizzesDone: number;
+  totalFlashcardGenerations: number;
+  totalVoiceMessages: number;
+  totalVisionScans: number;
+}) {
+  return (
+    stats.totalChatMessages * 10
+    + stats.totalQuizzesDone * 30
+    + stats.totalFlashcardGenerations * 20
+    + stats.totalVoiceMessages * 10
+    + stats.totalVisionScans * 20
+  );
+}
 
 const WRITE_ENDPOINT = '/__userdata';
 const DATA_FILE = '/userdata.json';
@@ -135,33 +154,56 @@ export async function loadUserData(): Promise<UserData> {
       ? raw.completedPomodoros
       : DEFAULT_USERDATA.completedPomodoros;
     const countBySource = (source: string) => history.filter((entry) => entry.source === source).length;
+    const totalChatMessages = typeof raw.totalChatMessages === 'number'
+      ? raw.totalChatMessages
+      : countBySource('chat');
+    const totalQuizzesDone = typeof raw.totalQuizzesDone === 'number'
+      ? raw.totalQuizzesDone
+      : countBySource('quiz');
+    const totalCardsGenerated = typeof raw.totalCardsGenerated === 'number'
+      ? raw.totalCardsGenerated
+      : 0;
+    const totalFlashcardGenerations = typeof raw.totalFlashcardGenerations === 'number'
+      ? raw.totalFlashcardGenerations
+      : 0;
+    const totalVoiceMessages = typeof raw.totalVoiceMessages === 'number'
+      ? raw.totalVoiceMessages
+      : countBySource('voice');
+    const totalVisionScans = typeof raw.totalVisionScans === 'number'
+      ? raw.totalVisionScans
+      : countBySource('vision');
+    const xpUpdates = Array.isArray(raw.xpUpdates)
+      ? raw.xpUpdates.filter((update): update is XpUpdate => (
+        Boolean(update)
+        && typeof update.id === 'string'
+        && typeof update.label === 'string'
+        && typeof update.amount === 'number'
+        && typeof update.createdAt === 'string'
+      ))
+      : DEFAULT_USERDATA.xpUpdates;
 
     return {
       ...DEFAULT_USERDATA,
       ...raw,
       history,
       completedPomodoros,
+      xpUpdates,
       totalStudyEntries: typeof raw.totalStudyEntries === 'number'
         ? raw.totalStudyEntries
         : history.length,
-      totalXp: typeof raw.totalXp === 'number'
-        ? raw.totalXp
-        : history.length * 10 + completedPomodoros * 25,
-      totalChatMessages: typeof raw.totalChatMessages === 'number'
-        ? raw.totalChatMessages
-        : countBySource('chat'),
-      totalQuizzesDone: typeof raw.totalQuizzesDone === 'number'
-        ? raw.totalQuizzesDone
-        : countBySource('quiz'),
-      totalCardsGenerated: typeof raw.totalCardsGenerated === 'number'
-        ? raw.totalCardsGenerated
-        : 0,
-      totalVoiceMessages: typeof raw.totalVoiceMessages === 'number'
-        ? raw.totalVoiceMessages
-        : countBySource('voice'),
-      totalVisionScans: typeof raw.totalVisionScans === 'number'
-        ? raw.totalVisionScans
-        : countBySource('vision'),
+      totalXp: calculateTotalXp({
+        totalChatMessages,
+        totalQuizzesDone,
+        totalFlashcardGenerations,
+        totalVoiceMessages,
+        totalVisionScans,
+      }),
+      totalChatMessages,
+      totalQuizzesDone,
+      totalCardsGenerated,
+      totalFlashcardGenerations,
+      totalVoiceMessages,
+      totalVisionScans,
     };
   } catch {
     return { ...DEFAULT_USERDATA };

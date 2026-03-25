@@ -4,12 +4,6 @@
   "rankLabel": "Scholar",
   "xpTarget": 1000,
   "weeklyGoal": 200,
-  "weeklyHighlights": [
-    "+50 XP - Solved a study problem",
-    "+25 XP - Completed a focus block",
-    "+30 XP - Generated flashcards",
-    "+10 XP - Kept the streak alive"
-  ],
   "achievements": [
     { "id": "first-ask",        "label": "First Ask",      "description": "Start your first study session" },
     { "id": "five-sessions",    "label": "5 Sessions",     "description": "Log five study entries" },
@@ -33,11 +27,13 @@
   "totalChatMessages": 0,
   "totalQuizzesDone": 0,
   "totalCardsGenerated": 0,
+  "totalFlashcardGenerations": 0,
   "totalVoiceMessages": 0,
   "totalVisionScans": 0,
   "notes": "",
   "activityDays": [],
   "completedPomodoros": 0,
   "pomodoroLog": [],
-  "pinnedAnswers": []
+  "pinnedAnswers": [],
+  "xpUpdates": []
 }

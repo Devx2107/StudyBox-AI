@@ -306,11 +306,6 @@ ${sourceText}`,
     }
   };
 
-  const resetMap = () => {
-    setMap(null);
-    setActiveNodeId(null);
-  };
-
   const positionedNodes = map ? positionConceptMap(map) : [];
   const nodeMap = Object.fromEntries(positionedNodes.map((node) => [node.id, node]));
   const activeNode = map?.nodes.find((node) => node.id === activeNodeId) ?? null;
@@ -375,15 +370,6 @@ ${sourceText}`,
               <p>Generate a visual concept map from notes, chat history, or selected study material.</p>
             </div>
           )}
-
-          <div className="study-toolbar">
-            <button className="btn primary" type="button" onClick={generateMap} disabled={busy || !sourceText.trim()}>
-              {busy ? 'Building...' : 'Generate concept map'}
-            </button>
-            {map && (
-              <button className="btn" type="button" onClick={resetMap}>Reset map</button>
-            )}
-          </div>
         </div>
 
         <div className="info-stack">
@@ -393,24 +379,27 @@ ${sourceText}`,
               <span>{map?.title ?? 'ready'}</span>
             </div>
             <div className="info-block-body concept-map-side-body">
+              <div className="deck-list">
+                <button className="deck-item" type="button" onClick={useSelectedHistory} disabled={!selectedHistory}>
+                  <span className="deck-name">Selected entry</span>
+                  <span className="deck-count">{selectedHistory ? 'ready' : 'empty'}</span>
+                </button>
+                <button className="deck-item" type="button" onClick={useNotes} disabled={!notes.trim()}>
+                  <span className="deck-name">Notes</span>
+                  <span className="deck-count">{notes.trim() ? 'ready' : 'empty'}</span>
+                </button>
+                <button className="deck-item" type="button" onClick={useRecentHistory} disabled={!history.length}>
+                  <span className="deck-name">Recent history</span>
+                  <span className="deck-count">{history.length} entries</span>
+                </button>
+              </div>
+
               <textarea
                 className="study-textarea study-textarea-sm"
                 value={sourceText}
                 onChange={(e) => setSourceText(e.target.value)}
                 placeholder="Use a vision result, notes, or any study text to build a concept map."
               />
-
-              <div className="study-toolbar">
-                <button className="btn" type="button" onClick={useSelectedHistory} disabled={!selectedHistory}>
-                  Use selected history
-                </button>
-                <button className="btn" type="button" onClick={useNotes} disabled={!notes.trim()}>
-                  Use notes
-                </button>
-                <button className="btn" type="button" onClick={useRecentHistory} disabled={!history.length}>
-                  Use recent history
-                </button>
-              </div>
 
               <button className="btn primary full" type="button" onClick={generateMap} disabled={busy || !sourceText.trim()}>
                 {busy ? 'Building...' : 'Generate concept map'}

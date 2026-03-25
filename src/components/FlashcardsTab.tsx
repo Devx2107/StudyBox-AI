@@ -3,7 +3,6 @@ import { ModelCategory } from '@runanywhere/web';
 import { TextGeneration } from '@runanywhere/web-llamacpp';
 import { useModelLoader } from '../hooks/useModelLoader';
 import { ModelBanner } from './ModelBanner';
-import { MarkdownContent } from './MarkdownContent';
 import { collectStudyFragments, extractJsonCandidates } from '../lib/studyOutput';
 import type { HistoryEntry } from '../types/history';
 
@@ -75,7 +74,6 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
   const [activeIndex, setActiveIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [masteredIndexes, setMasteredIndexes] = useState<number[]>([]);
   const [generationMessage, setGenerationMessage] = useState<string | null>(null);
   const defaultSource = useMemo(() => {
     if (selectedHistory) {
@@ -121,7 +119,6 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
           setCards(fallbackCards);
           setActiveIndex(0);
           setIsFlipped(false);
-          setMasteredIndexes([]);
           setGenerationMessage(loader.error || 'AI model could not be loaded, so a fallback deck was created from your source text.');
           return;
         }
@@ -149,7 +146,6 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
       }
       setActiveIndex(0);
       setIsFlipped(false);
-      setMasteredIndexes([]);
     } catch (error) {
       const fallbackCards = buildFallbackFlashcards(sourceText);
       const message = error instanceof Error ? error.message : String(error);
@@ -157,7 +153,6 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
       onCardsGenerated?.(fallbackCards.length);
       setActiveIndex(0);
       setIsFlipped(false);
-      setMasteredIndexes([]);
       setGenerationMessage(`AI generation failed, so a fallback deck was created. ${message}`);
     } finally {
       setBusy(false);
@@ -183,14 +178,6 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
     setIsFlipped(false);
   };
 
-  const rateCard = (rating: 'hard' | 'ok' | 'easy') => {
-    if (!cards.length) return;
-    if (rating === 'easy') {
-      setMasteredIndexes((prev) => (prev.includes(activeIndex) ? prev : [...prev, activeIndex]));
-    }
-    goToNext();
-  };
-
   return (
     <section className="card">
       <div className="card-header">
@@ -212,32 +199,45 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
             <>
               <div className="flashcard-area">
                 <button
+                  className="flashcard-arrow flashcard-arrow-left"
+                  type="button"
+                  onClick={goToPrevious}
+                  aria-label="Previous flashcard"
+                  disabled={cards.length < 2}
+                >
+                  ‹
+                </button>
+                <button
                   className={`study-flashcard ${isFlipped ? 'flipped' : ''}`}
                   type="button"
                   onClick={flipCard}
                 >
                   <div className="card-face">
-                    <div className="card-face-label">Question</div>
-                    <MarkdownContent className="card-face-text markdown-content" content={activeCard.front} />
-                    <div className="card-flip-hint">click to reveal</div>
+                    <div className="card-core">
+                      <div className="card-face-label">Question</div>
+                      <div className="card-face-text">{activeCard.front}</div>
+                      <div className="card-flip-hint">click to reveal</div>
+                    </div>
+                    <div className="flashcard-counter">{activeIndex + 1} / {cards.length}</div>
                   </div>
                   <div className="card-back">
-                    <MarkdownContent className="card-back-text markdown-content" content={activeCard.back} />
-                    <div className="card-flip-hint card-flip-back">click to flip back</div>
+                    <div className="card-core">
+                      <div className="card-face-label">Answer</div>
+                      <div className="card-back-text">{activeCard.back}</div>
+                      <div className="card-flip-hint card-flip-back">click to flip back</div>
+                    </div>
+                    <div className="flashcard-counter">{activeIndex + 1} / {cards.length}</div>
                   </div>
                 </button>
-              </div>
-
-              <div className="fc-nav">
-                <button className="btn sm" type="button" onClick={goToPrevious}>Prev</button>
-                <span className="fc-counter">{activeIndex + 1} / {cards.length}</span>
-                <button className="btn sm" type="button" onClick={goToNext}>Next</button>
-              </div>
-
-              <div className="fc-rating">
-                <button className="btn sm pink" type="button" onClick={() => rateCard('hard')}>Hard</button>
-                <button className="btn sm" type="button" onClick={() => rateCard('ok')}>OK</button>
-                <button className="btn sm cyan" type="button" onClick={() => rateCard('easy')}>Easy</button>
+                <button
+                  className="flashcard-arrow flashcard-arrow-right"
+                  type="button"
+                  onClick={goToNext}
+                  aria-label="Next flashcard"
+                  disabled={cards.length < 2}
+                >
+                  ›
+                </button>
               </div>
             </>
           ) : (
@@ -278,10 +278,9 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
               />
 
               <button className="btn primary full" type="button" onClick={generateCards} disabled={busy || !sourceText.trim()}>
-                {busy ? 'Generating...' : 'AI generate cards'}
+                {busy ? 'Generating...' : 'generate cards'}
               </button>
               {generationMessage && <p className="error-text">{generationMessage}</p>}
-              <p className="study-hint">The source box stays in sync with your latest selection unless you start drafting your own material.</p>
             </div>
           </div>
         </div>

@@ -11,7 +11,7 @@ import { SettingsTab } from "./components/SettingsTab";
 import { ProfileTab } from "./components/ProfileTab";
 import { MarkdownContent } from "./components/MarkdownContent";
 import type { HistoryEntry, HistorySource } from "./types/history";
-import { loadUserData, saveUserData, DEFAULT_USERDATA } from "./lib/userdata";
+import { loadUserData, saveUserData, DEFAULT_USERDATA, type XpUpdate } from "./lib/userdata";
 
 
 const tabs = [
@@ -61,7 +61,6 @@ interface ProfileStatsConfig {
   rankLabel: string;
   xpTarget: number;
   weeklyGoal: number;
-  weeklyHighlights: string[];
   achievements: Array<{ id: string; label: string; description: string }>;
 }
 
@@ -105,12 +104,30 @@ const historySourceLabels: Record<HistorySource, string> = {
   voice: "Voice",
   vision: "Vision",
   quiz: "Quiz",
-  tools: "Tools",
 };
 
 const DEFAULT_PROFILE_STATS = DEFAULT_USERDATA;
-const XP_PER_HISTORY_ENTRY = 10;
-const XP_PER_POMODORO = 25;
+const XP_PER_CHAT = 10;
+const XP_PER_VOICE = 10;
+const XP_PER_QUIZ = 30;
+const XP_PER_FLASHCARDS = 20;
+const XP_PER_VISION = 20;
+
+function calculateTotalXp(stats: {
+  totalChatMessages: number;
+  totalQuizzesDone: number;
+  totalFlashcardGenerations: number;
+  totalVoiceMessages: number;
+  totalVisionScans: number;
+}) {
+  return (
+    stats.totalChatMessages * XP_PER_CHAT
+    + stats.totalQuizzesDone * XP_PER_QUIZ
+    + stats.totalFlashcardGenerations * XP_PER_FLASHCARDS
+    + stats.totalVoiceMessages * XP_PER_VOICE
+    + stats.totalVisionScans * XP_PER_VISION
+  );
+}
 
 
 function toSafeFilename(value: string) {
@@ -257,7 +274,7 @@ function isThemeId(value: string | null): value is (typeof themes)[number]["id"]
 }
 
 function isHistoryFilter(value: string | null): value is "all" | HistorySource {
-  return value === "all" || value === "chat" || value === "voice" || value === "vision" || value === "quiz" || value === "tools";
+  return value === "all" || value === "chat" || value === "voice" || value === "vision" || value === "quiz";
 }
 
 function isPomodoroMode(value: string | null): value is PomodoroMode {
@@ -284,9 +301,11 @@ export function App() {
   const [completedPomodoros, setCompletedPomodoros] = useState(0);
   const [totalStudyEntries, setTotalStudyEntries] = useState(0);
   const [totalXp, setTotalXp] = useState(0);
+  const [xpUpdates, setXpUpdates] = useState<XpUpdate[]>([]);
   const [totalChatMessages, setTotalChatMessages] = useState(0);
   const [totalQuizzesDone, setTotalQuizzesDone] = useState(0);
   const [totalCardsGenerated, setTotalCardsGenerated] = useState(0);
+  const [totalFlashcardGenerations, setTotalFlashcardGenerations] = useState(0);
   const [totalVoiceMessages, setTotalVoiceMessages] = useState(0);
   const [totalVisionScans, setTotalVisionScans] = useState(0);
   const [pomodoroMode, setPomodoroMode] = useState<PomodoroMode>("work");
@@ -309,7 +328,7 @@ export function App() {
     const presentSources = new Set(history.map((entry) => entry.source));
     return [
       { id: "all" as const, label: "All" },
-      ...(["chat", "voice", "vision", "quiz", "tools"] as const)
+      ...(["chat", "voice", "vision", "quiz"] as const)
         .filter((source) => presentSources.has(source))
         .map((source) => ({ id: source, label: historySourceLabels[source] })),
     ];
@@ -727,7 +746,6 @@ export function App() {
         rankLabel: data.rankLabel,
         xpTarget: data.xpTarget,
         weeklyGoal: data.weeklyGoal,
-        weeklyHighlights: data.weeklyHighlights,
         achievements: data.achievements,
       });
 
@@ -756,9 +774,11 @@ export function App() {
       setCompletedPomodoros(data.completedPomodoros);
       setTotalStudyEntries(data.totalStudyEntries);
       setTotalXp(data.totalXp);
+      setXpUpdates(data.xpUpdates);
       setTotalChatMessages(data.totalChatMessages);
       setTotalQuizzesDone(data.totalQuizzesDone);
       setTotalCardsGenerated(data.totalCardsGenerated);
+      setTotalFlashcardGenerations(data.totalFlashcardGenerations);
       setTotalVoiceMessages(data.totalVoiceMessages);
       setTotalVisionScans(data.totalVisionScans);
 
@@ -780,13 +800,22 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
+    setTotalXp(calculateTotalXp({
+      totalChatMessages,
+      totalQuizzesDone,
+      totalFlashcardGenerations,
+      totalVoiceMessages,
+      totalVisionScans,
+    }));
+  }, [totalChatMessages, totalQuizzesDone, totalFlashcardGenerations, totalVoiceMessages, totalVisionScans]);
+
+  useEffect(() => {
     saveUserData({
       userName: profileStats.userName,
       welcome: profileStats.welcome,
       rankLabel: profileStats.rankLabel,
       xpTarget: profileStats.xpTarget,
       weeklyGoal: profileStats.weeklyGoal,
-      weeklyHighlights: profileStats.weeklyHighlights,
       achievements: profileStats.achievements,
       theme,
       activeTab,
@@ -803,6 +832,7 @@ export function App() {
       totalChatMessages,
       totalQuizzesDone,
       totalCardsGenerated,
+      totalFlashcardGenerations,
       totalVoiceMessages,
       totalVisionScans,
       notes,
@@ -810,6 +840,7 @@ export function App() {
       completedPomodoros,
       pomodoroLog,
       pinnedAnswers,
+      xpUpdates,
     });
   }, [
     profileStats,
@@ -818,8 +849,8 @@ export function App() {
     pomodoroMusic.selectedSource, pomodoroMusic.volume,
     pomodoroMode, secondsLeft,
     history, totalStudyEntries, totalXp,
-    totalChatMessages, totalQuizzesDone, totalCardsGenerated, totalVoiceMessages, totalVisionScans,
-    notes, normalizedActivityDays, completedPomodoros, pomodoroLog, pinnedAnswers,
+    totalChatMessages, totalQuizzesDone, totalCardsGenerated, totalFlashcardGenerations, totalVoiceMessages, totalVisionScans,
+    notes, normalizedActivityDays, completedPomodoros, pomodoroLog, pinnedAnswers, xpUpdates,
   ]);
 
 
@@ -863,7 +894,6 @@ export function App() {
 
     if (finishedMode === "work") {
       setCompletedPomodoros((prev) => prev + 1);
-      setTotalXp((prev) => prev + XP_PER_POMODORO);
       setActivityDays((prev) => {
         const today = dayKeyFromDate(new Date());
         return normalizeActivityDays([today, ...prev]);
@@ -880,6 +910,18 @@ export function App() {
     setActivityDays((prev) => normalizeActivityDays([day, ...prev]));
   };
 
+  const addXpUpdate = (label: string, amount: number, createdAt = new Date().toISOString()) => {
+    setXpUpdates((prev) => [
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        label,
+        amount,
+        createdAt,
+      },
+      ...prev,
+    ].slice(0, 24));
+  };
+
   const addHistoryEntry = (entry: Omit<HistoryEntry, "id" | "createdAt">) => {
     const createdAt = new Date().toISOString();
     const nextEntry: HistoryEntry = {
@@ -891,11 +933,14 @@ export function App() {
     setHistory((prev) => [nextEntry, ...prev].slice(0, 100));
     setSelectedHistoryId(nextEntry.id);
     setTotalStudyEntries((prev) => prev + 1);
-    setTotalXp((prev) => prev + XP_PER_HISTORY_ENTRY);
     if (entry.source === "chat") setTotalChatMessages((prev) => prev + 1);
     if (entry.source === "quiz") setTotalQuizzesDone((prev) => prev + 1);
     if (entry.source === "voice") setTotalVoiceMessages((prev) => prev + 1);
     if (entry.source === "vision") setTotalVisionScans((prev) => prev + 1);
+    if (entry.source === "chat") addXpUpdate("Chat session", XP_PER_CHAT, createdAt);
+    if (entry.source === "quiz") addXpUpdate("Quiz completed", XP_PER_QUIZ, createdAt);
+    if (entry.source === "voice") addXpUpdate("Voice session", XP_PER_VOICE, createdAt);
+    if (entry.source === "vision") addXpUpdate("Vision scan", XP_PER_VISION, createdAt);
     markActivity(dayKeyFromIso(createdAt));
   };
 
@@ -1256,7 +1301,14 @@ export function App() {
               selectedHistory={selectedHistory}
               notes={notes}
               languageModelId={preferredLanguageModelId || undefined}
-              onCardsGenerated={(count) => setTotalCardsGenerated((prev) => prev + count)}
+              onCardsGenerated={(count) => {
+                setTotalCardsGenerated((prev) => prev + count);
+                setTotalFlashcardGenerations((prev) => prev + 1);
+                addXpUpdate(
+                  count === 1 ? "Generated 1 flashcard" : `Generated ${count} flashcards`,
+                  XP_PER_FLASHCARDS,
+                );
+              }}
             />
           )}
           {activeTab === "quiz" && (
@@ -1285,6 +1337,7 @@ export function App() {
                 voiceMessages: totalVoiceMessages,
                 visionScans: totalVisionScans,
               }}
+              xpUpdates={xpUpdates.slice(0, 4)}
               calendar={studyCalendar}
               unlockedAchievements={unlockedAchievementIds}
               onUpdateUserName={(name) => setProfileStats((prev) => ({ ...prev, userName: name }))}

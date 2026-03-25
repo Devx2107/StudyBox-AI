@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
+import type { XpUpdate } from '../lib/userdata';
 
 interface ProfileAchievement {
   id: string;
@@ -12,7 +13,6 @@ interface ProfileConfig {
   rankLabel: string;
   xpTarget: number;
   weeklyGoal: number;
-  weeklyHighlights: string[];
   achievements: ProfileAchievement[];
 }
 
@@ -29,6 +29,7 @@ interface ProfileTabProps {
     voiceMessages: number;
     visionScans: number;
   };
+  xpUpdates: XpUpdate[];
   calendar: Array<{ key: string; dayNumber: number; studied: boolean; today: boolean } | null>;
   unlockedAchievements: string[];
   onUpdateUserName: (name: string) => void;
@@ -41,6 +42,7 @@ export function ProfileTab({
   historyCount,
   completedPomodoros,
   activityStats,
+  xpUpdates,
   calendar,
   unlockedAchievements,
   onUpdateUserName,
@@ -108,9 +110,15 @@ export function ProfileTab({
             <div className="profile-xp-bar">
               <div className="profile-xp-fill" style={{ width: `${levelProgress}%` }} />
             </div>
-            <div className="profile-highlights">
-              {profile.weeklyHighlights.map((item) => (
-                <div key={item} className="profile-highlight-item">{item}</div>
+            <div className="profile-xp-stream">
+              {xpUpdates.length === 0 && (
+                <div className="profile-xp-update empty">No XP updates yet.</div>
+              )}
+              {xpUpdates.map((update) => (
+                <div key={update.id} className="profile-xp-update">
+                  <span>{update.label}</span>
+                  <strong>+{update.amount} XP</strong>
+                </div>
               ))}
             </div>
           </div>

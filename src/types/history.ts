@@ -1,4 +1,4 @@
-export type HistorySource = 'chat' | 'tools' | 'vision' | 'voice' | 'quiz';
+export type HistorySource = 'chat' | 'vision' | 'voice' | 'quiz';
 
 export interface HistoryEntry {
   id: string;

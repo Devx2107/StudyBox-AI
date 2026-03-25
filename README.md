@@ -1,14 +1,33 @@
 # StudyBox-AI
 
-A minimal React + TypeScript starter app demonstrating **on-device AI in the browser** using the [`@runanywhere/web`](https://www.npmjs.com/package/@runanywhere/web) SDK. All inference runs locally via WebAssembly — no server, no API key, 100% private.
+StudyBox-AI is a local-first study workspace built with React, TypeScript, Vite, and the `@runanywhere/web` SDK. The app runs AI models directly in the browser for chat, vision, voice, note-making, quiz generation, flashcards, and concept mapping.
+
+No traditional backend is required for inference. Models are downloaded on first use, cached in the browser, and reused locally.
 
 ## Features
 
-| Tab | What it does |
-|-----|-------------|
-| **Chat** | Stream text from an on-device LLM (LFM2 350M) |
-| **Vision** | Point your camera and describe what the VLM sees (LFM2-VL 450M) |
-| **Voice** | Speak naturally — VAD detects speech, STT transcribes, LLM responds, TTS speaks back |
+| Area | What it does |
+| --- | --- |
+| Chat | Streams responses from an on-device language model |
+| Vision | Analyzes a camera frame or uploaded image with a local vision-language model |
+| Voice | Uses local VAD, STT, LLM, and TTS for a speak-and-response loop |
+| Smart Notes | Summarizes study history into editable notes |
+| Flashcards | Generates review cards from notes or prior sessions |
+| Quiz | Builds multiple-choice quizzes from study material |
+| Concept Map | Turns study material into a visual concept map |
+| Profile | Tracks streaks, XP, study activity, and achievements |
+| Pomodoro | Includes a focus timer with ambient audio |
+| Settings | Lets you choose theme, preferred models, and inspect acceleration mode |
+
+## Tech Stack
+
+- React 19
+- TypeScript
+- Vite 6
+- `@runanywhere/web`
+- `@runanywhere/web-llamacpp`
+- `@runanywhere/web-onnx`
+- `react-markdown` + KaTeX for rich output rendering
 
 ## Quick Start
 
@@ -17,113 +36,118 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173). Models are downloaded on first use and cached in the browser's Origin Private File System (OPFS).
+Open `http://localhost:5173`.
 
 ## How It Works
 
-```
-@runanywhere/web (npm package)
-  ├── WASM engine (llama.cpp, whisper.cpp, sherpa-onnx)
-  ├── Model management (download, OPFS cache, load/unload)
-  └── TypeScript API (TextGeneration, STT, TTS, VAD, VLM, VoicePipeline)
-```
+The app initializes the RunAnywhere SDK in [src/runanywhere.ts](src/runanywhere.ts), registers local model definitions, and loads models by category only when a feature needs them.
 
-The app imports everything from `@runanywhere/web`:
+Key runtime pieces:
 
-```typescript
-import { RunAnywhere, SDKEnvironment } from '@runanywhere/web';
-import { TextGeneration, VLMWorkerBridge } from '@runanywhere/web-llamacpp';
+- LLM and VLM features use `llama.cpp` through `@runanywhere/web-llamacpp`
+- STT, TTS, and VAD use ONNX-backed models through `@runanywhere/web-onnx`
+- Vision inference runs through a dedicated web worker
+- Downloaded model files are cached in the browser
 
-await RunAnywhere.initialize({ environment: SDKEnvironment.Development });
+## Persistence
 
-// Stream LLM text
-const { stream } = await TextGeneration.generateStream('Hello!', { maxTokens: 200 });
-for await (const token of stream) { console.log(token); }
+Most user-facing state is stored in `public/userdata.json` during local development, including:
 
-// VLM: describe an image
-const result = await VLMWorkerBridge.shared.process(rgbPixels, width, height, 'Describe this.');
-```
+- active tab
+- theme
+- preferred models
+- notes
+- history
+- streak / XP stats
+- pomodoro settings
+- pinned answers
+
+In dev mode, the Vite config exposes a local `POST /__userdata` endpoint that writes changes back to `public/userdata.json`. In production, the app still reads `userdata.json`, but the dev-only write endpoint is not available.
 
 ## Project Structure
 
-```
+```text
 src/
-├── main.tsx              # React root
-├── App.tsx               # Tab navigation (Chat | Vision | Voice)
-├── runanywhere.ts        # SDK init + model catalog + VLM worker
-├── workers/
-│   └── vlm-worker.ts     # VLM Web Worker entry (2 lines)
-├── hooks/
-│   └── useModelLoader.ts # Shared model download/load hook
-├── components/
-│   ├── ChatTab.tsx        # LLM streaming chat
-│   ├── VisionTab.tsx      # Camera + VLM inference
-│   ├── VoiceTab.tsx       # Full voice pipeline
-│   └── ModelBanner.tsx    # Download progress UI
-└── styles/
-    └── index.css          # Dark theme CSS
+  App.tsx                    # Main app shell and state orchestration
+  main.tsx                   # React entry point
+  runanywhere.ts             # SDK init, model catalog, runtime wiring
+  hooks/
+    useModelLoader.ts        # Shared model download/load hook
+  components/
+    ChatTab.tsx
+    VisionTab.tsx
+    VoiceTab.tsx
+    SmartNotesTab.tsx
+    FlashcardsTab.tsx
+    QuizTab.tsx
+    ConceptMapTab.tsx
+    ProfileTab.tsx
+    SettingsTab.tsx
+    ModelBanner.tsx
+    MarkdownContent.tsx
+  lib/
+    userdata.ts              # Load/save persisted app data
+    studyOutput.ts           # Helpers for parsing model output
+  workers/
+    vlm-worker.ts            # Vision worker entry
+  styles/
+    index.css                # Global styling and theme system
+public/
+  userdata.template.json     # Default persisted data template
+  userdata.json              # Local persisted data for development
 ```
 
-## Adding Your Own Models
+## Models
 
-Edit the `MODELS` array in `src/runanywhere.ts`:
+The bundled catalog in [src/runanywhere.ts](src/runanywhere.ts) currently includes:
 
-```typescript
-{
-  id: 'my-custom-model',
-  name: 'My Model',
-  repo: 'username/repo-name',           // HuggingFace repo
-  files: ['model.Q4_K_M.gguf'],         // Files to download
-  framework: LLMFramework.LlamaCpp,
-  modality: ModelCategory.Language,      // or Multimodal, SpeechRecognition, etc.
-  memoryRequirement: 500_000_000,        // Bytes
-}
-```
+- `lfm2-350m-q4_k_m` for lightweight chat
+- `lfm2-1.2b-tool-q4_k_m` for stronger local language tasks
+- `lfm2-vl-450m-q4_0` for vision
+- Whisper Tiny English for speech-to-text
+- Piper Lessac for text-to-speech
+- Silero VAD for speech detection
 
-Any GGUF model compatible with llama.cpp works for LLM/VLM. STT/TTS/VAD use sherpa-onnx models.
+You can add or replace models by editing the `MODELS` array in `src/runanywhere.ts`.
 
-## Deployment
-
-### Vercel
+## Build
 
 ```bash
 npm run build
-npx vercel --prod
 ```
 
-The included `vercel.json` sets the required Cross-Origin-Isolation headers.
+The Vite config copies the required WASM runtime assets into `dist/assets` during production builds.
 
-### Netlify
+## Deployment
 
-Add a `_headers` file:
+This project needs cross-origin isolation headers for SharedArrayBuffer and multi-threaded WASM support.
 
-```
-/*
-  Cross-Origin-Opener-Policy: same-origin
-  Cross-Origin-Embedder-Policy: credentialless
-```
+### Vercel
 
-### Any static host
+`vercel.json` is already configured with the required headers.
 
-Serve the `dist/` folder with these HTTP headers on all responses:
+### Other Static Hosts
 
-```
+Serve all app responses with:
+
+```text
 Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: credentialless
 ```
 
 ## Browser Requirements
 
-- Chrome 96+ or Edge 96+ (recommended: 120+)
-- WebAssembly (required)
-- SharedArrayBuffer (requires Cross-Origin Isolation headers)
-- OPFS (for persistent model cache)
+- Recent Chrome or Edge recommended
+- WebAssembly support
+- SharedArrayBuffer support
+- OPFS/browser storage for model caching
+- Camera and microphone permissions for vision and voice features
 
-## Documentation
+## Notes
 
-- [SDK API Reference](https://docs.runanywhere.ai)
-- [npm package](https://www.npmjs.com/package/@runanywhere/web)
-- [GitHub](https://github.com/RunanywhereAI/runanywhere-sdks)
+- The first run can take time because models are downloaded locally.
+- Voice and vision features depend on browser permissions and supported hardware/runtime acceleration.
+- The production app is static; the editable `userdata.json` write flow is a local-development convenience.
 
 ## License
 
