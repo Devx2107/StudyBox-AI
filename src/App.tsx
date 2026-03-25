@@ -11,6 +11,7 @@ import { SettingsTab } from "./components/SettingsTab";
 import { ProfileTab } from "./components/ProfileTab";
 import { MarkdownContent } from "./components/MarkdownContent";
 import type { HistoryEntry, HistorySource } from "./types/history";
+import { loadUserData, saveUserData, DEFAULT_USERDATA } from "./lib/userdata";
 
 
 const tabs = [
@@ -19,33 +20,13 @@ const tabs = [
   { id: "voice", label: "Voice", icon: "O", eyebrow: "Voice mode", title: "Speak and", accent: "Learn.", badge: "Speech Stack" },
   { id: "notes", label: "Notes", icon: "N", eyebrow: "Notes mode", title: "Write and", accent: "Summarise.", badge: "Smart Notes" },
   { id: "flashcards", label: "Cards", icon: "F", eyebrow: "Recall mode", title: "Flip and", accent: "Master.", badge: "Flashcards" },
-  { id: "quiz", label: "Quiz", icon: "Q", eyebrow: "Quiz mode", title: "Test", accent: "Yourself.", badge: "Quiz Lab" },
   { id: "map", label: "Map", icon: "M", eyebrow: "Map mode", title: "Map", accent: "It Out.", badge: "Concept Graph" },
+  { id: "quiz", label: "Quiz", icon: "Q", eyebrow: "Quiz mode", title: "Test", accent: "Yourself.", badge: "Quiz Lab" },
   { id: "profile", label: "Profile", icon: "P", eyebrow: "Profile mode", title: "Keep", accent: "Grinding.", badge: "Profile" },
   { id: "settings", label: "Settings", icon: "S", eyebrow: "Settings mode", title: "Tune Your", accent: "Workspace.", badge: "Preferences" },
 ] as const;
 
-const HISTORY_STORAGE_KEY = "studybox-ai-history-log";
-const LEGACY_HISTORY_STORAGE_KEY = "studybox-history-log";
-const ACTIVE_TAB_STORAGE_KEY = "studybox-ai-active-tab";
-const THEME_STORAGE_KEY = "studybox-ai-theme";
-const POMODORO_MUSIC_SOURCE_STORAGE_KEY = "studybox-ai-pomodoro-music-source";
-const POMODORO_MUSIC_VOLUME_STORAGE_KEY = "studybox-ai-pomodoro-music-volume";
-const NOTES_STORAGE_KEY = "studybox-ai-smart-notes";
-const LEGACY_NOTES_STORAGE_KEY = "studybox-smart-notes";
-const ACTIVITY_STORAGE_KEY = "studybox-ai-activity-days";
-const LEGACY_ACTIVITY_STORAGE_KEY = "studybox-activity-days";
-const POMODORO_COUNT_KEY = "studybox-ai-pomodoros";
-const LEGACY_POMODORO_COUNT_KEY = "studybox-pomodoros";
 
-const LANGUAGE_MODEL_STORAGE_KEY = "studybox-ai-language-model";
-const VISION_MODEL_STORAGE_KEY = "studybox-ai-vision-model";
-const PINNED_STORAGE_KEY = "studybox-ai-pinned-items";
-const POMODORO_LOG_STORAGE_KEY = "studybox-ai-pomodoro-log";
-const POMODORO_MODE_STORAGE_KEY = "studybox-ai-pomodoro-mode";
-const POMODORO_SECONDS_LEFT_STORAGE_KEY = "studybox-ai-pomodoro-seconds-left";
-const PROFILE_STORAGE_KEY = "studybox-ai-profile-stats";
-const HISTORY_FILTER_STORAGE_KEY = "studybox-ai-history-filter";
 
 type PomodoroMode = "work" | "break5" | "break10";
 type PomodoroMusicSource = "lofi" | "rain";
@@ -84,19 +65,7 @@ interface ProfileStatsConfig {
   achievements: Array<{ id: string; label: string; description: string }>;
 }
 
-interface StudyStatsExport {
-  exportedAt: string;
-  version: 1;
-  profile: ProfileStatsConfig;
-  stats: {
-    history: HistoryEntry[];
-    notes: string;
-    activityDays: string[];
-    completedPomodoros: number;
-    pomodoroLog: PomodoroSession[];
-    pinnedAnswers: PinnedAnswer[];
-  };
-}
+
 
 const POMODORO_PRESETS: Record<PomodoroMode, { label: string; badge: string; seconds: number }> = {
   work: { label: "Focus Session", badge: "work", seconds: 25 * 60 },
@@ -139,27 +108,8 @@ const historySourceLabels: Record<HistorySource, string> = {
   tools: "Tools",
 };
 
-const DEFAULT_PROFILE_STATS: ProfileStatsConfig = {
-  userName: "Study Explorer",
-  welcome: "Welcome back",
-  rankLabel: "Level 8 Scholar",
-  xpTarget: 1000,
-  weeklyGoal: 200,
-  weeklyHighlights: [
-    "+50 XP - Solved a study problem",
-    "+25 XP - Completed a focus block",
-    "+30 XP - Generated flashcards",
-    "+10 XP - Kept the streak alive",
-  ],
-  achievements: [
-    { id: "first-ask", label: "First Ask", description: "Start your first study session" },
-    { id: "five-sessions", label: "5 Sessions", description: "Log five study entries" },
-    { id: "three-day-streak", label: "3-Day Streak", description: "Study three days in a row" },
-    { id: "pomodoro-five", label: "Pomodoro x5", description: "Complete five focus sessions" },
-    { id: "deep-work", label: "Deep Work", description: "Reach ten focus blocks" },
-    { id: "xp-1000", label: "1000 XP", description: "Cross 1000 total XP" },
-  ],
-};
+const DEFAULT_PROFILE_STATS = DEFAULT_USERDATA;
+
 
 function toSafeFilename(value: string) {
   return value
@@ -241,20 +191,33 @@ function buildHistoryExport(entry: HistoryEntry) {
   };
 }
 
+function dayKeyPart(value: number) {
+  return String(value).padStart(2, "0");
+}
+
+function dayKeyFromDate(date: Date) {
+  return `${date.getFullYear()}-${dayKeyPart(date.getMonth() + 1)}-${dayKeyPart(date.getDate())}`;
+}
+
 function dayKeyFromIso(iso: string) {
-  return iso.slice(0, 10);
+  return dayKeyFromDate(new Date(iso));
+}
+
+function dateFromDayKey(dayKey: string) {
+  const [year, month, day] = dayKey.split("-").map(Number);
+  return new Date(year, month - 1, day);
 }
 
 function getStreak(days: string[]) {
   if (!days.length) return 0;
   const sorted = [...new Set(days)].sort((a, b) => b.localeCompare(a));
   let streak = 1;
-  let cursor = new Date(`${sorted[0]}T00:00:00`);
+  let cursor = dateFromDayKey(sorted[0]);
 
   for (let i = 1; i < sorted.length; i += 1) {
     const expected = new Date(cursor);
     expected.setDate(expected.getDate() - 1);
-    const expectedKey = expected.toISOString().slice(0, 10);
+    const expectedKey = dayKeyFromDate(expected);
     if (sorted[i] !== expectedKey) break;
     streak += 1;
     cursor = expected;
@@ -278,52 +241,20 @@ function isPomodoroMode(value: string | null): value is PomodoroMode {
   return value === "work" || value === "break5" || value === "break10";
 }
 
-function getStoredTheme(): (typeof themes)[number]["id"] {
-  if (typeof window === "undefined") return "classic";
-  const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
-  return isThemeId(savedTheme) ? savedTheme : "classic";
-}
-
-function getStoredActiveTab(): (typeof tabs)[number]["id"] {
-  if (typeof window === "undefined") return "chat";
-  const savedTab = window.localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
-  return isTabId(savedTab) ? savedTab : "chat";
-}
-
-function getStoredPomodoroMusicState(): PomodoroMusicState {
-  if (typeof window === "undefined") return DEFAULT_POMODORO_MUSIC_STATE;
-  const savedSource = window.localStorage.getItem(POMODORO_MUSIC_SOURCE_STORAGE_KEY);
-  const savedVolume = Number(window.localStorage.getItem(POMODORO_MUSIC_VOLUME_STORAGE_KEY) ?? "");
-  const volume = Number.isFinite(savedVolume) && savedVolume >= 0 && savedVolume <= 1
-    ? savedVolume
-    : DEFAULT_POMODORO_MUSIC_STATE.volume;
-  if (savedSource === "lofi" || savedSource === "rain") {
-    return {
-      ...DEFAULT_POMODORO_MUSIC_STATE,
-      selectedSource: savedSource,
-      volume,
-    };
-  }
-  return {
-    ...DEFAULT_POMODORO_MUSIC_STATE,
-    volume,
-  };
-}
 
 export function App() {
   const [sdkReady, setSdkReady] = useState(false);
   const [sdkError, setSdkError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["id"]>(() => getStoredActiveTab());
+  const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["id"]>("chat");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [historySourceFilter, setHistorySourceFilter] = useState<"all" | HistorySource>("all");
   const [historySearch, setHistorySearch] = useState("");
   const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
-  const [theme, setTheme] = useState<(typeof themes)[number]["id"]>(() => getStoredTheme());
+  const [theme, setTheme] = useState<(typeof themes)[number]["id"]>("classic");
 
   const [preferredLanguageModelId, setPreferredLanguageModelId] = useState("");
   const [preferredVisionModelId, setPreferredVisionModelId] = useState("");
   const [profileStats, setProfileStats] = useState<ProfileStatsConfig>(DEFAULT_PROFILE_STATS);
-  const [statsImportStatus, setStatsImportStatus] = useState<string | null>(null);
   const [pinnedAnswers, setPinnedAnswers] = useState<PinnedAnswer[]>([]);
   const [notes, setNotes] = useState("");
   const [activityDays, setActivityDays] = useState<string[]>([]);
@@ -332,7 +263,7 @@ export function App() {
   const [secondsLeft, setSecondsLeft] = useState(POMODORO_PRESETS.work.seconds);
   const [pomodoroRunning, setPomodoroRunning] = useState(false);
   const [pomodoroLog, setPomodoroLog] = useState<PomodoroSession[]>([]);
-  const [pomodoroMusic, setPomodoroMusic] = useState<PomodoroMusicState>(() => getStoredPomodoroMusicState());
+  const [pomodoroMusic, setPomodoroMusic] = useState<PomodoroMusicState>(DEFAULT_POMODORO_MUSIC_STATE);
   const [timerPopupOpen, setTimerPopupOpen] = useState(false);
   const timerPopupRef = useRef<HTMLDivElement | null>(null);
   const pomodoroAudioRefs = useRef<Partial<Record<PomodoroMusicSource, HTMLAudioElement>>>({});
@@ -383,13 +314,14 @@ export function App() {
     const now = new Date();
     const year = now.getFullYear();
     const month = now.getMonth();
+    const firstDayOfWeek = new Date(year, month, 1).getDay();
     const totalDays = new Date(year, month + 1, 0).getDate();
-    const todayKey = new Date().toISOString().slice(0, 10);
-
-    return Array.from({ length: totalDays }, (_, index) => {
+    const todayKey = dayKeyFromDate(now);
+    const leadingEmptyDays = Array.from({ length: firstDayOfWeek }, () => null);
+    const monthDays = Array.from({ length: totalDays }, (_, index) => {
       const dayNumber = index + 1;
       const date = new Date(year, month, dayNumber);
-      const key = dayKeyFromIso(date.toISOString());
+      const key = dayKeyFromDate(date);
       return {
         key,
         dayNumber,
@@ -397,6 +329,7 @@ export function App() {
         today: key === todayKey,
       };
     });
+    return [...leadingEmptyDays, ...monthDays];
   }, [activityDays]);
 
   useEffect(() => {
@@ -750,185 +683,98 @@ export function App() {
     };
   }, []);
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(HISTORY_STORAGE_KEY) ?? localStorage.getItem(LEGACY_HISTORY_STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as HistoryEntry[];
-      setHistory(parsed);
-      setSelectedHistoryId(parsed[0]?.id ?? null);
-    } catch {
-      localStorage.removeItem(HISTORY_STORAGE_KEY);
-      localStorage.removeItem(LEGACY_HISTORY_STORAGE_KEY);
-    }
-  }, []);
-
+  // ── Single unified load from userdata.json ──────────────────────────────
   useEffect(() => {
     let cancelled = false;
+    void loadUserData().then((data) => {
+      if (cancelled) return;
 
-    const loadProfileStats = async () => {
-      const savedProfile = localStorage.getItem(PROFILE_STORAGE_KEY);
-      if (savedProfile) {
-        try {
-          const parsed = JSON.parse(savedProfile) as ProfileStatsConfig;
-          if (!cancelled) setProfileStats({ ...DEFAULT_PROFILE_STATS, ...parsed });
-          return;
-        } catch {
-          localStorage.removeItem(PROFILE_STORAGE_KEY);
-        }
+      // Profile
+      setProfileStats({
+        userName: data.userName,
+        welcome: data.welcome,
+        rankLabel: data.rankLabel,
+        xpTarget: data.xpTarget,
+        weeklyGoal: data.weeklyGoal,
+        weeklyHighlights: data.weeklyHighlights,
+        achievements: data.achievements,
+      });
+
+      // Navigation + appearance
+      if (isTabId(data.activeTab)) setActiveTab(data.activeTab);
+      if (isThemeId(data.theme)) setTheme(data.theme);
+      if (isHistoryFilter(data.historySourceFilter)) setHistorySourceFilter(data.historySourceFilter as "all" | HistorySource);
+
+      // Model preferences
+      if (data.preferredLanguageModelId) setPreferredLanguageModelId(data.preferredLanguageModelId);
+      if (data.preferredVisionModelId) setPreferredVisionModelId(data.preferredVisionModelId);
+
+      // Music preferences
+      setPomodoroMusic((prev) => ({
+        ...prev,
+        selectedSource: data.pomodoroMusicSource ?? prev.selectedSource,
+        volume: data.pomodoroMusicVolume,
+      }));
+
+      // Pomodoro
+      if (isPomodoroMode(data.pomodoroMode)) {
+        setPomodoroMode(data.pomodoroMode);
+        setSecondsLeft(data.pomodoroSecondsLeft > 0 ? data.pomodoroSecondsLeft : POMODORO_PRESETS[data.pomodoroMode].seconds);
       }
+      setPomodoroLog(data.pomodoroLog);
+      setCompletedPomodoros(data.completedPomodoros);
 
-      try {
-        const response = await fetch("/profile-stats.json");
-        if (!response.ok) throw new Error(`Profile seed failed (${response.status})`);
-        const payload = await response.json() as Partial<ProfileStatsConfig>;
-        if (!cancelled) {
-          setProfileStats({ ...DEFAULT_PROFILE_STATS, ...payload });
-        }
-      } catch {
-        if (!cancelled) {
-          setProfileStats(DEFAULT_PROFILE_STATS);
-        }
-      }
-    };
-
-    void loadProfileStats();
-
-    return () => {
-      cancelled = true;
-    };
+      // User data
+      setHistory(data.history as HistoryEntry[]);
+      setSelectedHistoryId(data.history[0]?.id ?? null);
+      setNotes(data.notes);
+      setActivityDays(data.activityDays);
+      setPinnedAnswers(data.pinnedAnswers);
+    });
+    return () => { cancelled = true; };
   }, []);
 
+
+  // ── Single unified save to userdata.json (debounced) ────────────────────
   useEffect(() => {
-    const savedFilter = localStorage.getItem(HISTORY_FILTER_STORAGE_KEY);
-    if (isHistoryFilter(savedFilter)) {
-      setHistorySourceFilter(savedFilter);
-    }
-
-    const savedNotes = localStorage.getItem(NOTES_STORAGE_KEY) ?? localStorage.getItem(LEGACY_NOTES_STORAGE_KEY);
-    if (savedNotes) setNotes(savedNotes);
-
-    const savedPinned = localStorage.getItem(PINNED_STORAGE_KEY);
-    if (savedPinned) {
-      try {
-        setPinnedAnswers(JSON.parse(savedPinned) as PinnedAnswer[]);
-      } catch {
-        localStorage.removeItem(PINNED_STORAGE_KEY);
-      }
-    }
-
-
-    const savedLanguageModel = localStorage.getItem(LANGUAGE_MODEL_STORAGE_KEY);
-    if (savedLanguageModel) setPreferredLanguageModelId(savedLanguageModel);
-
-    const savedVisionModel = localStorage.getItem(VISION_MODEL_STORAGE_KEY);
-    if (savedVisionModel) setPreferredVisionModelId(savedVisionModel);
-
-    const savedDays = localStorage.getItem(ACTIVITY_STORAGE_KEY) ?? localStorage.getItem(LEGACY_ACTIVITY_STORAGE_KEY);
-    if (savedDays) {
-      try {
-        setActivityDays(JSON.parse(savedDays) as string[]);
-      } catch {
-        localStorage.removeItem(ACTIVITY_STORAGE_KEY);
-        localStorage.removeItem(LEGACY_ACTIVITY_STORAGE_KEY);
-      }
-    }
-
-    const savedPomodoros = Number(localStorage.getItem(POMODORO_COUNT_KEY) ?? localStorage.getItem(LEGACY_POMODORO_COUNT_KEY) ?? "0");
-    if (!Number.isNaN(savedPomodoros)) setCompletedPomodoros(savedPomodoros);
-
-    const savedPomodoroLog = localStorage.getItem(POMODORO_LOG_STORAGE_KEY);
-    if (savedPomodoroLog) {
-      try {
-        setPomodoroLog(JSON.parse(savedPomodoroLog) as PomodoroSession[]);
-      } catch {
-        localStorage.removeItem(POMODORO_LOG_STORAGE_KEY);
-      }
-    }
-
-    const savedPomodoroMode = localStorage.getItem(POMODORO_MODE_STORAGE_KEY);
-    if (isPomodoroMode(savedPomodoroMode)) {
-      setPomodoroMode(savedPomodoroMode);
-      const savedSecondsLeft = Number(localStorage.getItem(POMODORO_SECONDS_LEFT_STORAGE_KEY) ?? "");
-      if (!Number.isNaN(savedSecondsLeft) && savedSecondsLeft > 0) {
-        setSecondsLeft(savedSecondsLeft);
-      } else {
-        setSecondsLeft(POMODORO_PRESETS[savedPomodoroMode].seconds);
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profileStats));
-  }, [profileStats]);
-
-  useEffect(() => {
-    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
-  }, [history]);
-
-  useEffect(() => {
-    localStorage.setItem(ACTIVE_TAB_STORAGE_KEY, activeTab);
-  }, [activeTab]);
-
-  useEffect(() => {
+    // Always sync theme to body immediately (zero-delay, not debounced).
     document.body.dataset.theme = theme;
-    localStorage.setItem(THEME_STORAGE_KEY, theme);
   }, [theme]);
 
   useEffect(() => {
-    localStorage.setItem(HISTORY_FILTER_STORAGE_KEY, historySourceFilter);
-  }, [historySourceFilter]);
+    saveUserData({
+      userName: profileStats.userName,
+      welcome: profileStats.welcome,
+      rankLabel: profileStats.rankLabel,
+      xpTarget: profileStats.xpTarget,
+      weeklyGoal: profileStats.weeklyGoal,
+      weeklyHighlights: profileStats.weeklyHighlights,
+      achievements: profileStats.achievements,
+      theme,
+      activeTab,
+      historySourceFilter,
+      preferredLanguageModelId,
+      preferredVisionModelId,
+      pomodoroMusicSource: pomodoroMusic.selectedSource,
+      pomodoroMusicVolume: pomodoroMusic.volume,
+      pomodoroMode,
+      pomodoroSecondsLeft: secondsLeft,
+      history,
+      notes,
+      activityDays,
+      completedPomodoros,
+      pomodoroLog,
+      pinnedAnswers,
+    });
+  }, [
+    profileStats,
+    theme, activeTab, historySourceFilter,
+    preferredLanguageModelId, preferredVisionModelId,
+    pomodoroMusic.selectedSource, pomodoroMusic.volume,
+    pomodoroMode, secondsLeft,
+    history, notes, activityDays, completedPomodoros, pomodoroLog, pinnedAnswers,
+  ]);
 
-
-  useEffect(() => {
-    if (preferredLanguageModelId) localStorage.setItem(LANGUAGE_MODEL_STORAGE_KEY, preferredLanguageModelId);
-    else localStorage.removeItem(LANGUAGE_MODEL_STORAGE_KEY);
-  }, [preferredLanguageModelId]);
-
-  useEffect(() => {
-    if (preferredVisionModelId) localStorage.setItem(VISION_MODEL_STORAGE_KEY, preferredVisionModelId);
-    else localStorage.removeItem(VISION_MODEL_STORAGE_KEY);
-  }, [preferredVisionModelId]);
-
-  useEffect(() => {
-    localStorage.setItem(NOTES_STORAGE_KEY, notes);
-  }, [notes]);
-
-  useEffect(() => {
-    localStorage.setItem(PINNED_STORAGE_KEY, JSON.stringify(pinnedAnswers));
-  }, [pinnedAnswers]);
-
-  useEffect(() => {
-    localStorage.setItem(ACTIVITY_STORAGE_KEY, JSON.stringify(activityDays));
-  }, [activityDays]);
-
-  useEffect(() => {
-    localStorage.setItem(POMODORO_COUNT_KEY, String(completedPomodoros));
-  }, [completedPomodoros]);
-
-  useEffect(() => {
-    localStorage.setItem(POMODORO_LOG_STORAGE_KEY, JSON.stringify(pomodoroLog));
-  }, [pomodoroLog]);
-
-  useEffect(() => {
-    localStorage.setItem(POMODORO_MODE_STORAGE_KEY, pomodoroMode);
-  }, [pomodoroMode]);
-
-  useEffect(() => {
-    localStorage.setItem(POMODORO_SECONDS_LEFT_STORAGE_KEY, String(secondsLeft));
-  }, [secondsLeft]);
-
-  useEffect(() => {
-    if (pomodoroMusic.selectedSource) {
-      localStorage.setItem(POMODORO_MUSIC_SOURCE_STORAGE_KEY, pomodoroMusic.selectedSource);
-    } else {
-      localStorage.removeItem(POMODORO_MUSIC_SOURCE_STORAGE_KEY);
-    }
-  }, [pomodoroMusic.selectedSource]);
-
-  useEffect(() => {
-    localStorage.setItem(POMODORO_MUSIC_VOLUME_STORAGE_KEY, String(pomodoroMusic.volume));
-  }, [pomodoroMusic.volume]);
 
   useEffect(() => {
     if (!pomodoroRunning) return undefined;
@@ -971,7 +817,7 @@ export function App() {
     if (finishedMode === "work") {
       setCompletedPomodoros((prev) => prev + 1);
       setActivityDays((prev) => {
-        const today = new Date().toISOString().slice(0, 10);
+        const today = dayKeyFromDate(new Date());
         return prev.includes(today) ? prev : [today, ...prev];
       });
       setPomodoroMode("break5");
@@ -1002,6 +848,16 @@ export function App() {
   const clearHistory = () => {
     setHistory([]);
     setSelectedHistoryId(null);
+  };
+
+  const removeSelectedHistory = () => {
+    if (!selectedHistory) return;
+
+    setHistory((prev) => {
+      const next = prev.filter((entry) => entry.id !== selectedHistory.id);
+      setSelectedHistoryId(next[0]?.id ?? null);
+      return next;
+    });
   };
 
   const skipPomodoro = () => {
@@ -1103,55 +959,6 @@ export function App() {
     printWindow.document.close();
     printWindow.focus();
     printWindow.print();
-  };
-
-  const exportStudyStats = () => {
-    const payload: StudyStatsExport = {
-      exportedAt: new Date().toISOString(),
-      version: 1,
-      profile: profileStats,
-      stats: {
-        history,
-        notes,
-        activityDays,
-        completedPomodoros,
-        pomodoroLog,
-        pinnedAnswers,
-      },
-    };
-
-    downloadBlob(
-      JSON.stringify(payload, null, 2),
-      "application/json;charset=utf-8",
-      `studybox-ai-stats-${new Date().toISOString().slice(0, 10)}.json`,
-    );
-    setStatsImportStatus(`Exported stats on ${new Date(payload.exportedAt).toLocaleString()}`);
-  };
-
-  const importStudyStats = async (file: File) => {
-    try {
-      const raw = await file.text();
-      const parsed = JSON.parse(raw) as Partial<StudyStatsExport>;
-
-      if (!parsed || parsed.version !== 1 || !parsed.profile || !parsed.stats) {
-        throw new Error("This file is not a valid StudyBox-AI stats export.");
-      }
-
-      setProfileStats({ ...DEFAULT_PROFILE_STATS, ...parsed.profile });
-      setHistory(Array.isArray(parsed.stats.history) ? parsed.stats.history : []);
-      setSelectedHistoryId(parsed.stats.history?.[0]?.id ?? null);
-      setNotes(typeof parsed.stats.notes === "string" ? parsed.stats.notes : "");
-      setActivityDays(Array.isArray(parsed.stats.activityDays) ? parsed.stats.activityDays : []);
-      setCompletedPomodoros(
-        typeof parsed.stats.completedPomodoros === "number" ? parsed.stats.completedPomodoros : 0,
-      );
-      setPomodoroLog(Array.isArray(parsed.stats.pomodoroLog) ? parsed.stats.pomodoroLog : []);
-      setPinnedAnswers(Array.isArray(parsed.stats.pinnedAnswers) ? parsed.stats.pinnedAnswers : []);
-      setStatsImportStatus(`Imported stats from ${file.name}`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setStatsImportStatus(`Import failed: ${message}`);
-    }
   };
 
   if (sdkError) {
@@ -1405,9 +1212,7 @@ export function App() {
               completedPomodoros={completedPomodoros}
               calendar={studyCalendar}
               unlockedAchievements={unlockedAchievementIds}
-              onExportStats={exportStudyStats}
-              onImportStats={importStudyStats}
-              importStatus={statsImportStatus}
+              onUpdateUserName={(name) => setProfileStats((prev) => ({ ...prev, userName: name }))}
             />
           )}
           {activeTab === "settings" && (
@@ -1435,7 +1240,7 @@ export function App() {
                 )}
                 {pinnedAnswers.map((item) => (
                   <div key={item.id} className="pinned-item">
-                    <button className="pinned-remove" onClick={() => removePinnedAnswer(item.id)} type="button">Remove</button>
+                    <button className="chat-header-btn history-preview-btn pinned-remove" onClick={() => removePinnedAnswer(item.id)} type="button">Remove</button>
                     <div className="history-preview-label">Prompt</div>
                     <MarkdownContent className="pinned-question markdown-content" content={item.prompt} />
                     <div className="history-preview-label">Answer</div>
@@ -1490,6 +1295,7 @@ export function App() {
 
                 {selectedHistory && (
                   <div className="history-preview">
+                    <button className="chat-header-btn history-preview-btn history-remove" onClick={removeSelectedHistory} type="button">Remove</button>
                     <div className="history-actions">
                       <button className="chat-header-btn history-preview-btn" onClick={copySelectedEntry} type="button">Copy</button>
                       <button className="chat-header-btn history-preview-btn" onClick={shareSelectedEntry} type="button">Share</button>

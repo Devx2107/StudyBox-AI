@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 
 interface ProfileAchievement {
   id: string;
@@ -22,11 +22,9 @@ interface ProfileTabProps {
   xp: number;
   historyCount: number;
   completedPomodoros: number;
-  calendar: Array<{ key: string; dayNumber: number; studied: boolean; today: boolean }>;
+  calendar: Array<{ key: string; dayNumber: number; studied: boolean; today: boolean } | null>;
   unlockedAchievements: string[];
-  onExportStats: () => void;
-  onImportStats: (file: File) => Promise<void>;
-  importStatus: string | null;
+  onUpdateUserName: (name: string) => void;
 }
 
 export function ProfileTab({
@@ -37,11 +35,10 @@ export function ProfileTab({
   completedPomodoros,
   calendar,
   unlockedAchievements,
-  onExportStats,
-  onImportStats,
-  importStatus,
+  onUpdateUserName,
 }: ProfileTabProps) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editName, setEditName] = useState(profile.userName);
   const levelProgress = Math.max(0, Math.min(100, Math.round((xp / Math.max(profile.xpTarget, 1)) * 100)));
   const xpToNext = Math.max(profile.xpTarget - xp, 0);
   const currentMonth = new Date().toLocaleString([], { month: 'long', year: 'numeric' });
@@ -52,26 +49,42 @@ export function ProfileTab({
         <div className="profile-hero">
           <span className="profile-hero-icon">S</span>
           <div className="profile-welcome">{profile.welcome}</div>
-          <div className="profile-name">{profile.userName}</div>
+          {isEditingName ? (
+            <input
+              className="profile-name-input"
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const val = editName.trim();
+                  if (val) onUpdateUserName(val);
+                  else setEditName(profile.userName);
+                  setIsEditingName(false);
+                } else if (e.key === 'Escape') {
+                  setEditName(profile.userName);
+                  setIsEditingName(false);
+                }
+              }}
+              onBlur={() => {
+                const val = editName.trim();
+                if (val) onUpdateUserName(val);
+                else setEditName(profile.userName);
+                setIsEditingName(false);
+              }}
+              autoFocus
+              maxLength={30}
+            />
+          ) : (
+            <div className="profile-name-display" onClick={() => setIsEditingName(true)} title="Click to edit name">
+              <div className="profile-name">{profile.userName}</div>
+              <svg className="edit-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 20h9"></path>
+                <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+              </svg>
+            </div>
+          )}
           <div className="profile-rank">{profile.rankLabel}</div>
           <div className="profile-streak-copy">{streak} day streak active</div>
-          <div className="profile-actions">
-            <button className="btn primary" type="button" onClick={onExportStats}>Export stats</button>
-            <button className="btn" type="button" onClick={() => fileInputRef.current?.click()}>Import stats</button>
-          </div>
-          <input
-            ref={fileInputRef}
-            className="sr-only"
-            type="file"
-            accept="application/json"
-            onChange={async (event) => {
-              const file = event.target.files?.[0];
-              if (!file) return;
-              await onImportStats(file);
-              event.target.value = '';
-            }}
-          />
-          {importStatus && <div className="profile-import-status">{importStatus}</div>}
         </div>
 
         <div className="info-block">
@@ -141,15 +154,21 @@ export function ProfileTab({
           </div>
 
           <div className="calendar-grid profile-calendar-grid">
-            {calendar.map((day) => (
-              <div
-                key={day.key}
-                className={`calendar-day ${day.studied ? 'active' : ''} ${day.today ? 'today' : ''}`}
-                title={day.key}
-              >
-                {day.dayNumber}
-              </div>
+            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((d, i) => (
+              <div key={`header-${i}`} className="calendar-day-header">{d}</div>
             ))}
+            {calendar.map((day, i) => {
+              if (!day) return <div key={`empty-${i}`} className="calendar-day empty" />;
+              return (
+                <div
+                  key={day.key}
+                  className={`calendar-day ${day.studied ? 'active' : ''} ${day.today ? 'today' : ''}`}
+                  title={day.key}
+                >
+                  {day.dayNumber}
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>

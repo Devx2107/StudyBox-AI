@@ -57,7 +57,7 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
       }
 
       const { stream, result: resultPromise, cancel } = await TextGeneration.generateStream(text, {
-        maxTokens: 768,
+        maxTokens: 256,
         temperature: 0.45,
       });
       cancelRef.current = cancel;

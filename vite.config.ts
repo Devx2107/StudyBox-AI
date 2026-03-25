@@ -59,8 +59,56 @@ function copyWasmPlugin(): Plugin {
   };
 }
 
+/**
+ * Local user-data persistence plugin (dev only).
+ *
+ * - On server start: if public/userdata.json is missing, copies the template.
+ * - POST /__userdata: receives JSON body and writes it to public/userdata.json.
+ */
+function userdataPlugin(): Plugin {
+  const publicDir = path.resolve(__dir, 'public');
+  const dataFile = path.join(publicDir, 'userdata.json');
+  const templateFile = path.join(publicDir, 'userdata.template.json');
+
+  return {
+    name: 'userdata',
+    apply: 'serve',
+
+    configureServer(server) {
+      // Auto-create userdata.json from template on first run.
+      if (!fs.existsSync(dataFile) && fs.existsSync(templateFile)) {
+        fs.copyFileSync(templateFile, dataFile);
+        console.log('  ✓ [userdata] Created public/userdata.json from template');
+      }
+
+      // Write endpoint: POST /__userdata
+      server.middlewares.use('/__userdata', (req, res) => {
+        if (req.method !== 'POST') {
+          res.writeHead(405).end('Method Not Allowed');
+          return;
+        }
+
+        const chunks: Buffer[] = [];
+        req.on('data', (chunk: Buffer) => chunks.push(chunk));
+        req.on('end', () => {
+          try {
+            const body = Buffer.concat(chunks).toString('utf8');
+            // Validate JSON before writing.
+            JSON.parse(body);
+            fs.writeFileSync(dataFile, body, 'utf8');
+            res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"ok":true}');
+          } catch {
+            res.writeHead(400).end('Bad Request');
+          }
+        });
+        req.on('error', () => res.writeHead(500).end('Server Error'));
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [react(), copyWasmPlugin()],
+  plugins: [react(), copyWasmPlugin(), userdataPlugin()],
   server: {
     headers: {
       // Cross-Origin Isolation — required for SharedArrayBuffer / multi-threaded WASM.
