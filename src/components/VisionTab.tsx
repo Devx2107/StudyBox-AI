@@ -6,10 +6,10 @@ import { ModelBanner } from './ModelBanner';
 import { MarkdownContent } from './MarkdownContent';
 import type { HistoryReporter } from '../types/history';
 
-const LIVE_INTERVAL_MS = 2500;
-const LIVE_MAX_TOKENS = 20;
 const SINGLE_MAX_TOKENS = 56;
 const CAPTURE_DIM = 256;
+const DEFAULT_VISION_SYSTEM_PROMPT = `Analyze the image and solve within 1 line.`;
+const VISION_HISTORY_PROMPT = 'Analyze image';
 
 interface VisionResult {
   text: string;
@@ -24,6 +24,11 @@ interface UploadedImage {
 
 interface VisionTabProps extends HistoryReporter {
   visionModelId?: string;
+}
+
+interface MediaDimensions {
+  width: number;
+  height: number;
 }
 
 function rgbFromImageData(data: Uint8ClampedArray) {
@@ -64,35 +69,37 @@ async function extractImagePixels(file: File, targetMaxDim: number) {
   }
 }
 
+async function readImageDimensions(file: File) {
+  const objectUrl = URL.createObjectURL(file);
+
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Could not decode the selected image.'));
+      img.src = objectUrl;
+    });
+
+    return { width: image.width, height: image.height };
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
 export function VisionTab({ onHistoryEntry, visionModelId }: VisionTabProps) {
   const loader = useModelLoader(ModelCategory.Multimodal, false, visionModelId);
   const [cameraActive, setCameraActive] = useState(false);
   const [processing, setProcessing] = useState(false);
-  const [liveMode, setLiveMode] = useState(false);
   const [result, setResult] = useState<VisionResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [uploadedImage, setUploadedImage] = useState<UploadedImage | null>(null);
-  const [prompt, setPrompt] = useState(
-    'You are a helpful study assistant. Analyze the image. If it contains a question or problem, solve it step-by-step in a clear and simple way. If it is notes, summarize them in bullet points.',
-  );
+  const [sourceDimensions, setSourceDimensions] = useState<MediaDimensions>({ width: 640, height: 360 });
   const fileInputRef = useRef<HTMLInputElement>(null);
   const videoMountRef = useRef<HTMLDivElement>(null);
   const captureRef = useRef<VideoCapture | null>(null);
   const processingRef = useRef(false);
-  const liveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const liveModeRef = useRef(false);
 
   processingRef.current = processing;
-  liveModeRef.current = liveMode;
-
-  const stopLive = useCallback(() => {
-    setLiveMode(false);
-    liveModeRef.current = false;
-    if (liveIntervalRef.current) {
-      clearInterval(liveIntervalRef.current);
-      liveIntervalRef.current = null;
-    }
-  }, []);
 
   const stopCamera = useCallback(() => {
     const cam = captureRef.current;
@@ -101,6 +108,7 @@ export function VisionTab({ onHistoryEntry, visionModelId }: VisionTabProps) {
     cam.videoElement.parentNode?.removeChild(cam.videoElement);
     captureRef.current = null;
     setCameraActive(false);
+    setSourceDimensions({ width: 640, height: 360 });
   }, []);
 
   const startCamera = useCallback(async () => {
@@ -113,9 +121,16 @@ export function VisionTab({ onHistoryEntry, visionModelId }: VisionTabProps) {
     });
 
     try {
-      const cam = new VideoCapture({ facingMode: 'environment' });
+      const cam = new VideoCapture({
+        facingMode: 'environment',
+        idealWidth: 1280,
+        idealHeight: 720,
+      });
       await cam.start();
       captureRef.current = cam;
+      if (cam.videoWidth > 0 && cam.videoHeight > 0) {
+        setSourceDimensions({ width: cam.videoWidth, height: cam.videoHeight });
+      }
       setCameraActive(true);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -134,7 +149,6 @@ export function VisionTab({ onHistoryEntry, visionModelId }: VisionTabProps) {
 
   useEffect(() => {
     return () => {
-      if (liveIntervalRef.current) clearInterval(liveIntervalRef.current);
       stopCamera();
     };
   }, [stopCamera]);
@@ -158,12 +172,29 @@ export function VisionTab({ onHistoryEntry, visionModelId }: VisionTabProps) {
     const el = capture.videoElement;
     el.style.width = '100%';
     el.style.height = '100%';
-    el.style.objectFit = 'cover';
+    el.style.objectFit = 'contain';
 
     if (el.parentNode !== mount) {
       mount.replaceChildren(el);
     }
-  }, [cameraActive, processing, liveMode, result, error]);
+
+    const syncDimensions = () => {
+      const width = el.videoWidth || capture.videoWidth;
+      const height = el.videoHeight || capture.videoHeight;
+      if (width > 0 && height > 0) {
+        setSourceDimensions({ width, height });
+      }
+    };
+
+    syncDimensions();
+    el.addEventListener('loadedmetadata', syncDimensions);
+    el.addEventListener('resize', syncDimensions);
+
+    return () => {
+      el.removeEventListener('loadedmetadata', syncDimensions);
+      el.removeEventListener('resize', syncDimensions);
+    };
+  }, [cameraActive, processing, result, error]);
 
   const runLocalVision = useCallback(async (
     rgbPixels: Uint8Array,
@@ -187,23 +218,19 @@ export function VisionTab({ onHistoryEntry, visionModelId }: VisionTabProps) {
       rgbPixels,
       width,
       height,
-      `You are a helpful study assistant.
-      Analyze this image carefully.
-
-      If it contains:
-      - A math problem: solve step-by-step
-      - Theory: explain clearly
-      - Notes: summarize in bullets
-
-      User request: ${prompt}`,
-      { maxTokens, temperature: 0.35 },
+      '',
+      {
+        maxTokens,
+        temperature: 0.35,
+        systemPrompt: DEFAULT_VISION_SYSTEM_PROMPT,
+      },
     );
 
     return {
       text: response.text,
       meta: 'Local VLM',
     };
-  }, [loader, prompt]);
+  }, [loader]);
 
   const processUploadedImage = useCallback(async (file: File, maxTokens: number) => {
     const { rgbPixels, width, height } = await extractImagePixels(file, CAPTURE_DIM);
@@ -241,9 +268,7 @@ export function VisionTab({ onHistoryEntry, visionModelId }: VisionTabProps) {
         meta: response.meta,
       });
 
-      if (!liveModeRef.current) {
-        onHistoryEntry?.({ source: 'vision', prompt, response: response.text });
-      }
+      onHistoryEntry?.({ source: 'vision', prompt: VISION_HISTORY_PROMPT, response: response.text });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const isWasmCrash = msg.includes('memory access out of bounds') || msg.includes('RuntimeError');
@@ -252,16 +277,13 @@ export function VisionTab({ onHistoryEntry, visionModelId }: VisionTabProps) {
         setResult({ text: 'Recovering from memory error... next frame will retry.', totalMs: 0 });
       } else {
         setError(msg);
-        if (!liveModeRef.current) {
-          onHistoryEntry?.({ source: 'vision', prompt, response: `Error: ${msg}` });
-        }
-        if (liveModeRef.current) stopLive();
+        onHistoryEntry?.({ source: 'vision', prompt: VISION_HISTORY_PROMPT, response: `Error: ${msg}` });
       }
     } finally {
       setProcessing(false);
       processingRef.current = false;
     }
-  }, [onHistoryEntry, processCameraFrame, processUploadedImage, prompt, stopLive, uploadedImage]);
+  }, [onHistoryEntry, processCameraFrame, processUploadedImage, uploadedImage]);
 
   const describeSingle = useCallback(async () => {
     if (!captureRef.current?.isCapturing && !uploadedImage) {
@@ -271,44 +293,18 @@ export function VisionTab({ onHistoryEntry, visionModelId }: VisionTabProps) {
     await runAnalysis(SINGLE_MAX_TOKENS);
   }, [startCamera, runAnalysis, uploadedImage]);
 
-  const startLive = useCallback(async () => {
-    if (uploadedImage) {
-      setError('Live mode works with the camera feed only. Clear the uploaded image first.');
-      return;
-    }
-
-    if (!captureRef.current?.isCapturing) {
-      await startCamera();
-    }
-
-    setLiveMode(true);
-    liveModeRef.current = true;
-
-    void runAnalysis(LIVE_MAX_TOKENS);
-
-    liveIntervalRef.current = setInterval(() => {
-      if (!processingRef.current && liveModeRef.current) {
-        void runAnalysis(LIVE_MAX_TOKENS);
-      }
-    }, LIVE_INTERVAL_MS);
-  }, [startCamera, runAnalysis, uploadedImage]);
-
-  const toggleLive = useCallback(() => {
-    if (liveMode) {
-      stopLive();
-    } else {
-      void startLive();
-    }
-  }, [liveMode, startLive, stopLive]);
-
   const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
-    stopLive();
     stopCamera();
     setError(null);
     setResult(null);
+
+    const dimensions = await readImageDimensions(file);
+    if (dimensions.width > 0 && dimensions.height > 0) {
+      setSourceDimensions(dimensions);
+    }
 
     setUploadedImage((prev) => {
       if (prev) URL.revokeObjectURL(prev.previewUrl);
@@ -326,6 +322,7 @@ export function VisionTab({ onHistoryEntry, visionModelId }: VisionTabProps) {
       if (prev) URL.revokeObjectURL(prev.previewUrl);
       return null;
     });
+    setSourceDimensions({ width: 640, height: 360 });
   };
 
   const sourceLabel = cameraActive
@@ -338,7 +335,11 @@ export function VisionTab({ onHistoryEntry, visionModelId }: VisionTabProps) {
     <section className="card">
       <div className="card-header">
         <div className="card-title">Vision workspace</div>
-        <div className="card-badge">{liveMode ? 'camera + live' : 'camera + upload'}</div>
+        <div className="vision-header-tools">
+          <span className={`vision-header-pill ${cameraActive ? 'active' : ''}`}>camera</span>
+          <span className={`vision-header-pill ${uploadedImage ? 'active' : ''}`}>upload</span>
+          <div className="card-badge">camera + upload</div>
+        </div>
       </div>
 
       <ModelBanner
@@ -350,85 +351,81 @@ export function VisionTab({ onHistoryEntry, visionModelId }: VisionTabProps) {
       />
 
       <div className="card-body">
-        <div className="camera-frame">
-          <div className="camera-grid" />
-          <div className="camera-corners" aria-hidden="true">
-            <span className="corner tl" />
-            <span className="corner tr" />
-            <span className="corner bl" />
-            <span className="corner br" />
-          </div>
-          {cameraActive && <div className="camera-scan" />}
-          <div className="camera-feed" ref={videoMountRef} />
-          {!cameraActive && uploadedImage && (
-            <div className="camera-overlay">
-              <img className="vision-preview-image" src={uploadedImage.previewUrl} alt="Uploaded study material" />
-            </div>
-          )}
-          {!cameraActive && !uploadedImage && (
-            <div className="camera-overlay">
-              <div className="empty-state camera-empty">
-                <h3>Camera or image</h3>
-                <p>Start the camera or upload a worksheet, notes page, or problem screenshot.</p>
+        <div className="vision-workspace">
+          <div className="camera-frame-shell">
+            <div
+              className="camera-frame"
+              style={{ aspectRatio: `${sourceDimensions.width} / ${sourceDimensions.height}` }}
+            >
+              <div className="camera-grid" />
+              <div className="camera-corners" aria-hidden="true">
+                <span className="corner tl" />
+                <span className="corner tr" />
+                <span className="corner bl" />
+                <span className="corner br" />
               </div>
+              {cameraActive && <div className="camera-scan" />}
+              <div className="camera-feed" ref={videoMountRef} />
+              {!cameraActive && uploadedImage && (
+                <div className="camera-overlay">
+                  <img className="vision-preview-image" src={uploadedImage.previewUrl} alt="Uploaded study material" />
+                </div>
+              )}
+              {!cameraActive && !uploadedImage && (
+                <div className="camera-overlay">
+                  <div className="empty-state camera-empty">
+                    <h3>Camera or image</h3>
+                    <p>Start the camera or upload an image.</p>
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-          <div className="camera-label">
-            {cameraActive ? <span className="rec-dot" /> : null}
-            {cameraActive ? 'camera online' : uploadedImage ? 'image loaded' : 'camera offline'}
           </div>
-        </div>
 
-        <input
-          className="vision-prompt"
-          type="text"
-          placeholder="What do you want to know about the image?"
-          value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
-          disabled={liveMode}
-        />
+          <div className="vision-side-panel">
+            <div className="vision-actions">
+              <button
+                className="btn primary vision-btn-alt"
+                onClick={uploadedImage ? clearUploadedImage : () => fileInputRef.current?.click()}
+                type="button"
+                disabled={processing || cameraActive}
+              >
+                {uploadedImage ? 'Clear Image' : 'Upload Image'}
+              </button>
+              {!cameraActive ? (
+                <button className="btn primary vision-btn-alt" onClick={startCamera} type="button" disabled={processing || Boolean(uploadedImage)}>
+                  Start Camera
+                </button>
+              ) : (
+                <button className="btn primary vision-btn-alt" onClick={stopCamera} type="button" disabled={processing}>
+                  Stop Camera
+                </button>
+              )}
+              <button
+                className="btn primary"
+                onClick={describeSingle}
+                disabled={processing || (!cameraActive && !uploadedImage)}
+                type="button"
+              >
+                {processing ? 'Analyzing...' : 'Analyze Image'}
+              </button>
+            </div>
 
-        <div className="vision-mode-bar">
-          <span className={`vision-mode-chip ${cameraActive ? 'active' : ''}`}>camera</span>
-          <span className={`vision-mode-chip ${uploadedImage ? 'active' : ''}`}>upload</span>
-          <span className={`vision-mode-chip ${liveMode ? 'active live' : ''}`}>live</span>
-          <span className="vision-mode-summary">{sourceLabel}</span>
-        </div>
-
-        <div className="vision-actions">
-          <button className="btn" onClick={() => fileInputRef.current?.click()} type="button" disabled={liveMode}>
-            Upload Image
-          </button>
-          {uploadedImage && (
-            <button className="btn" onClick={clearUploadedImage} type="button" disabled={processing}>
-              Clear Image
-            </button>
-          )}
-          {!cameraActive ? (
-            <button className="btn primary" onClick={startCamera} type="button" disabled={liveMode}>
-              Start Camera
-            </button>
-          ) : (
-            <button className="btn" onClick={stopCamera} type="button" disabled={processing || liveMode}>
-              Stop Camera
-            </button>
-          )}
-          <button
-            className="btn primary"
-            onClick={describeSingle}
-            disabled={processing || liveMode || (!cameraActive && !uploadedImage)}
-            type="button"
-          >
-            {processing && !liveMode ? 'Analyzing...' : cameraActive ? 'Click Picture' : 'Analyze Image'}
-          </button>
-          <button
-            className={`btn ${liveMode ? 'pink' : ''}`}
-            onClick={toggleLive}
-            disabled={Boolean(uploadedImage) || (processing && !liveMode)}
-            type="button"
-          >
-            {liveMode ? 'Stop Live' : 'Live'}
-          </button>
+            {result && (
+              <div className="result-panel vision-result-panel">
+                <div className="result-panel-header">Scan result</div>
+                <div className="result-panel-body">
+                  <MarkdownContent className="markdown-content" content={result.text} />
+                  {(result.totalMs > 0 || result.meta) && (
+                    <div className="message-stats">
+                      {result.meta ? `${result.meta} - ` : ''}
+                      {result.totalMs > 0 ? `${(result.totalMs / 1000).toFixed(1)}s` : ''}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         <input
@@ -440,7 +437,7 @@ export function VisionTab({ onHistoryEntry, visionModelId }: VisionTabProps) {
         />
 
         <p className="study-hint">
-          This page handles both live camera scans and uploaded study images. All processing runs fully on-device using the local VLM. Live mode is camera-only.
+          This page handles both camera scans and uploaded study images. All processing runs fully on-device using the local VLM.
         </p>
 
         {error && (
@@ -448,21 +445,6 @@ export function VisionTab({ onHistoryEntry, visionModelId }: VisionTabProps) {
             <div className="result-panel-header">Vision error</div>
             <div className="result-panel-body">
               <span className="error-text">Error: {error}</span>
-            </div>
-          </div>
-        )}
-
-        {result && (
-          <div className="result-panel">
-            <div className="result-panel-header">{liveMode ? 'Live result' : 'Scan result'}</div>
-            <div className="result-panel-body">
-              <MarkdownContent className="markdown-content" content={result.text} />
-              {(result.totalMs > 0 || result.meta) && (
-                <div className="message-stats">
-                  {result.meta ? `${result.meta} - ` : ''}
-                  {result.totalMs > 0 ? `${(result.totalMs / 1000).toFixed(1)}s` : ''}
-                </div>
-              )}
             </div>
           </div>
         )}
