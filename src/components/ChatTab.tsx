@@ -28,6 +28,16 @@ const CHAT_SYSTEM_PROMPT =
 // unbounded history into a small local context window.
 const MAX_HISTORY_TURNS = 6;
 
+// Approximate context window shared by every model in the catalog
+// (LFM2-350M, LFM2-1.2B-Tool, and Qwen2.5-3B are all trained/published at
+// 32,768 tokens - see runanywhere.ts model catalog). This is intentionally
+// a single shared constant rather than a per-model lookup: the SDK's
+// CompactModelDef/ManagedModel types (what this app actually reads via
+// ModelManager) don't expose a contextLength field, so there's no live
+// value to read. This is a label for "roughly how full is the window",
+// not an exact, SDK-verified number - shown to the user as approximate.
+const APPROX_CONTEXT_WINDOW = 32_768;
+
 /** Builds a single prompt string containing recent conversation turns plus the new message. */
 function buildPromptWithHistory(history: Message[], newMessage: string): string {
   const recent = history
@@ -48,6 +58,10 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [generating, setGenerating] = useState(false);
+  // Cumulative input+output tokens spent across this conversation so far.
+  // Approximate: it tracks what's actually been sent/generated through this
+  // UI, not a live read of the model's internal KV cache state.
+  const [contextTokensUsed, setContextTokensUsed] = useState(0);
   const cancelRef = useRef<(() => void) | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -74,22 +88,15 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
     });
   }, []);
 
-  const send = useCallback(async () => {
-    const text = input.trim();
-    if (!text || generating) return;
-
-    setInput('');
-    inputRef.current?.focus();
-
-    const historyForPrompt = messages;
-    const prompt = buildPromptWithHistory(historyForPrompt, text);
-
-    setMessages((prev) => [...prev, { role: 'user', text }]);
+  /**
+   * Shared generation path used by both send() and regenerate(). Takes the
+   * conversation history to build the prompt from (excluding the user turn
+   * being answered), the new user message text, and the index of the
+   * assistant message slot to stream the result into.
+   */
+  const runGeneration = useCallback(async (historyForPrompt: Message[], userText: string, assistantIdx: number) => {
+    const prompt = buildPromptWithHistory(historyForPrompt, userText);
     setGenerating(true);
-
-    const assistantIdx = messageCountRef.current + 1;
-    messageCountRef.current += 2; // user message + assistant message
-    setMessages((prev) => [...prev, { role: 'assistant', text: '' }]);
 
     try {
       if (loader.state !== 'ready') {
@@ -118,22 +125,62 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
       const result = await resultPromise;
       const finalText = (result.text || accumulated).trim();
       const statsSummary = `${result.tokensUsed} tokens - ${result.tokensPerSecond.toFixed(1)} tok/s - ${result.latencyMs.toFixed(0)}ms`;
+      setContextTokensUsed((prev) => prev + result.inputTokens + result.tokensUsed);
 
       setAssistantMessage(assistantIdx, {
         role: 'assistant',
         text: finalText,
         stats: { summary: statsSummary },
       });
-      onHistoryEntry?.({ source: 'chat', prompt: text, response: finalText });
+      onHistoryEntry?.({ source: 'chat', prompt: userText, response: finalText });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setAssistantMessage(assistantIdx, { role: 'assistant', text: `Error: ${msg}` });
-      onHistoryEntry?.({ source: 'chat', prompt: text, response: `Error: ${msg}` });
+      onHistoryEntry?.({ source: 'chat', prompt: userText, response: `Error: ${msg}` });
     } finally {
       cancelRef.current = null;
       setGenerating(false);
     }
-  }, [input, generating, messages, loader, onHistoryEntry, setAssistantMessage]);
+  }, [loader, onHistoryEntry, setAssistantMessage]);
+
+  const send = useCallback(async () => {
+    const text = input.trim();
+    if (!text || generating) return;
+
+    setInput('');
+    inputRef.current?.focus();
+
+    const historyForPrompt = messages;
+    setMessages((prev) => [...prev, { role: 'user', text }]);
+
+    const assistantIdx = messageCountRef.current + 1;
+    messageCountRef.current += 2; // user message + assistant message
+    setMessages((prev) => [...prev, { role: 'assistant', text: '' }]);
+
+    await runGeneration(historyForPrompt, text, assistantIdx);
+  }, [input, generating, messages, runGeneration]);
+
+  /**
+   * Regenerates the most recent assistant reply in place. Rebuilds the
+   * prompt from everything *before* that reply (so the model isn't fed its
+   * own previous answer as if it were prior context) and overwrites the
+   * same message slot rather than appending a new one.
+   */
+  const regenerate = useCallback(async () => {
+    if (generating || messages.length < 2) return;
+
+    const lastAssistantIdx = messages.length - 1;
+    const lastMessage = messages[lastAssistantIdx];
+    if (!lastMessage || lastMessage.role !== 'assistant') return;
+
+    const lastUserMessage = messages[lastAssistantIdx - 1];
+    if (!lastUserMessage || lastUserMessage.role !== 'user') return;
+
+    const historyForPrompt = messages.slice(0, lastAssistantIdx - 1);
+    setAssistantMessage(lastAssistantIdx, { role: 'assistant', text: '' });
+
+    await runGeneration(historyForPrompt, lastUserMessage.text, lastAssistantIdx);
+  }, [generating, messages, runGeneration, setAssistantMessage]);
 
   const handleCancel = () => {
     cancelRef.current?.();
@@ -217,6 +264,10 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
           ? 'LLM error'
           : 'LLM not loaded';
 
+  // Approximate, not exact - see APPROX_CONTEXT_WINDOW comment above for why
+  // this can't be a precise live readout.
+  const contextUsagePercent = Math.min(100, Math.round((contextTokensUsed / APPROX_CONTEXT_WINDOW) * 100));
+
   return (
     <section className="card">
       <div className="card-header">
@@ -234,6 +285,11 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
           <button className="chat-header-btn" type="button" onClick={() => exportConversation('md')} disabled={!conversationText}>
             Export .md
           </button>
+          {contextTokensUsed > 0 && (
+            <div className="card-badge" title="Approximate - based on tokens sent/generated through this chat, not a live read of the model's context window">
+              ~{contextUsagePercent}% of context (approx)
+            </div>
+          )}
           <div className="card-badge">{chatBadge}</div>
         </div>
       </div>
@@ -275,6 +331,11 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
                 </div>
                 {msg.role === 'assistant' && msg.text.trim() && (
                   <div className="msg-actions">
+                    {i === messages.length - 1 && !generating && (
+                      <button className="msg-action-btn" type="button" onClick={regenerate}>
+                        Regenerate
+                      </button>
+                    )}
                     <button className="msg-action-btn" type="button" onClick={() => pinMessage(i)}>
                       Pin Answer
                     </button>
