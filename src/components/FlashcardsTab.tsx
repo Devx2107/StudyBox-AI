@@ -19,6 +19,9 @@ interface FlashcardsTabProps {
   onCardsGenerated?: (count: number) => void;
 }
 
+// Keep in sync with the count requested in the generateCards() prompt below.
+const FLASHCARD_COUNT = 8;
+
 function parseFlashcards(raw: string): Flashcard[] {
   for (const candidate of extractJsonCandidates(raw)) {
     try {
@@ -30,7 +33,7 @@ function parseFlashcards(raw: string): Flashcard[] {
             front: card.front.trim(),
             back: card.back.trim(),
           }))
-          .slice(0, 8);
+          .slice(0, FLASHCARD_COUNT);
       }
     } catch {
       // keep trying the next candidate
@@ -47,7 +50,7 @@ function parseFlashcards(raw: string): Flashcard[] {
       };
     })
     .filter((card) => card.front && card.back)
-    .slice(0, 8);
+    .slice(0, FLASHCARD_COUNT);
 }
 
 function buildFallbackFlashcards(sourceText: string): Flashcard[] {
@@ -55,7 +58,7 @@ function buildFallbackFlashcards(sourceText: string): Flashcard[] {
   const fallbackFragments = fragments.length
     ? fragments
     : [sourceText.trim() || 'Review the study material.'];
-  const count = Math.min(Math.max(fallbackFragments.length, 3), 8);
+  const count = Math.min(Math.max(fallbackFragments.length, 3), FLASHCARD_COUNT);
 
   return Array.from({ length: count }, (_, index) => {
     const fragment = fallbackFragments[index % fallbackFragments.length];
@@ -125,7 +128,7 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
       }
 
       const { stream, result } = await TextGeneration.generateStream(
-        `Create 6 study flashcards from this material. Return only JSON in this shape: [{"front":"question","back":"answer"}]. Keep each side short.\n\n${sourceText}`,
+        `Create ${FLASHCARD_COUNT} study flashcards from this material. Return only JSON in this shape: [{"front":"question","back":"answer"}]. Keep each side short.\n\n${sourceText}`,
         { maxTokens: 520, temperature: 0.3 },
       );
 

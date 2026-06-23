@@ -43,7 +43,11 @@ export function SmartNotesTab({ history, selectedHistory, notes, languageModelId
     try {
       const { stream, result } = await TextGeneration.generateStream(
         `Turn this study session into concise notes with short headings, bullet points, and key takeaways.\n\n${recentContext}`,
-        { maxTokens: 280, temperature: 0.25 },
+        // 280 tokens was too tight to cover up to 8 history entries with
+        // headings + bullets + takeaways for each - summaries were getting
+        // cut off mid-bullet, especially with stronger models that actually
+        // try to follow the full instruction instead of trailing off early.
+        { maxTokens: 700, temperature: 0.25 },
       );
 
       let accumulated = '';
