@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ModelCategory, ModelManager } from '@runanywhere/web';
+import { ModelCategory } from '@runanywhere/web';
 import { TextGeneration } from '@runanywhere/web-llamacpp';
 import { useModelLoader } from '../hooks/useModelLoader';
 import { ModelBanner } from './ModelBanner';
@@ -209,14 +209,10 @@ function positionConceptMap(map: ConceptMap): PositionedNode[] {
 }
 
 export function ConceptMapTab({ history, selectedHistory, notes, languageModelId }: ConceptMapTabProps) {
-  const preferredMapModelId = useMemo(() => {
-    if (languageModelId) return languageModelId;
-
-    return ModelManager.getModels()
-      .filter((model) => model.modality === ModelCategory.Language)
-      .sort((a, b) => (b.memoryRequirement ?? 0) - (a.memoryRequirement ?? 0))[0]?.id;
-  }, [languageModelId]);
-  const loader = useModelLoader(ModelCategory.Language, false, preferredMapModelId);
+  // No tab-specific override needed: useModelLoader now defaults every
+  // Language-category caller to DEFAULT_LANGUAGE_MODEL_ID (currently the
+  // Qwen2.5 3B model) unless languageModelId is explicitly set in Settings.
+  const loader = useModelLoader(ModelCategory.Language, false, languageModelId);
   const [busy, setBusy] = useState(false);
   const [map, setMap] = useState<ConceptMap | null>(null);
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
