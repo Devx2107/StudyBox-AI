@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from 'react';
 import { ModelManager, ModelCategory, EventBus } from '@runanywhere/web';
+import { DEFAULT_LANGUAGE_MODEL_ID } from '../runanywhere';
 
 export type LoaderState = 'idle' | 'downloading' | 'loading' | 'ready' | 'error';
 
@@ -39,23 +40,46 @@ export function useModelLoader(
       return true;
     }
 
-    if (loadingRef.current) return false;
+    // A load is already in flight (e.g. called twice in quick succession,
+    // such as a double-click). Wait for it instead of immediately reporting
+    // failure — the caller would otherwise see a spurious "could not load"
+    // error even though the model is actively loading successfully.
+    if (loadingRef.current) {
+      while (loadingRef.current) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      const nowLoaded = ModelManager.getLoadedModel(category);
+      if (nowLoaded && (!preferredModelId || nowLoaded.id === preferredModelId)) {
+        setState('ready');
+        return true;
+      }
+      return false;
+    }
     loadingRef.current = true;
 
     try {
-      // Prefer the lightest registered model in a category for faster startup/inference.
-      const models = ModelManager.getModels()
-        .filter((m) => m.modality === category)
-        .sort((a, b) => (a.memoryRequirement ?? Number.MAX_SAFE_INTEGER) - (b.memoryRequirement ?? Number.MAX_SAFE_INTEGER));
+      const models = ModelManager.getModels().filter((m) => m.modality === category);
       if (models.length === 0) {
         setError(`No ${category} model registered`);
         setState('error');
         return false;
       }
 
-      const model = (preferredModelId
-        ? models.find((candidate) => candidate.id === preferredModelId)
-        : null) ?? models[0];
+      // Selection priority:
+      // 1. An explicitly requested model id (preferredModelId)
+      // 2. The category-wide default (e.g. DEFAULT_LANGUAGE_MODEL_ID for
+      //    Language), if it's registered
+      // 3. The lightest registered model, as a last-resort fallback so the
+      //    app still works if the default isn't present in this category
+      const byId = (id: string) => models.find((candidate) => candidate.id === id);
+      const lightest = [...models].sort(
+        (a, b) => (a.memoryRequirement ?? Number.MAX_SAFE_INTEGER) - (b.memoryRequirement ?? Number.MAX_SAFE_INTEGER),
+      )[0];
+
+      const model =
+        (preferredModelId ? byId(preferredModelId) : null) ??
+        (category === ModelCategory.Language ? byId(DEFAULT_LANGUAGE_MODEL_ID) : null) ??
+        lightest;
 
       // Download if needed
       if (model.status !== 'downloaded' && model.status !== 'loaded') {

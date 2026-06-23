@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { ModelCategory, ModelManager } from '@runanywhere/web';
 import type { CompactModelDef } from '@runanywhere/web';
 import { AppSelect } from './AppSelect';
+import { DEFAULT_LANGUAGE_MODEL_ID } from '../runanywhere';
 
 interface OptionItem {
   id: string;
@@ -70,7 +71,11 @@ export function SettingsTab({
   const languageModels = useMemo(
     () => ModelManager.getModels()
       .filter((model) => model.modality === ModelCategory.Language)
-      .sort((a, b) => (a.memoryRequirement ?? Number.MAX_SAFE_INTEGER) - (b.memoryRequirement ?? Number.MAX_SAFE_INTEGER))
+      .sort((a, b) => {
+        if (a.id === DEFAULT_LANGUAGE_MODEL_ID) return -1;
+        if (b.id === DEFAULT_LANGUAGE_MODEL_ID) return 1;
+        return (a.memoryRequirement ?? Number.MAX_SAFE_INTEGER) - (b.memoryRequirement ?? Number.MAX_SAFE_INTEGER);
+      })
       .map(toModelOption),
     [],
   );
@@ -127,7 +132,7 @@ export function SettingsTab({
                 onChange={onPreferredLanguageModelChange}
                 ariaLabel="Language model"
                 options={[
-                  { value: '', label: 'Auto-select lightest model' },
+                  { value: '', label: 'Auto-select (recommended: Qwen2.5 3B)' },
                   ...languageModels.map((model) => ({ value: model.id, label: model.label })),
                 ]}
               />
@@ -147,7 +152,7 @@ export function SettingsTab({
             </label>
 
             <p className="provider-note">These preferences affect local chat, notes, flashcards, quizzes, concept maps, voice response generation, and vision analysis.</p>
-            <p className="provider-note">When this is left on auto, concept maps may prefer a stronger local language model for more reliable structured output.</p>
+            <p className="provider-note">On auto, all of these use the Qwen2.5 3B model by default for the most reliable responses. Switch to a smaller model if downloads or generation feel too slow on your device.</p>
           </div>
         </div>
 

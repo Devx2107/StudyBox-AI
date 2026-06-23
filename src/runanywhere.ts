@@ -30,8 +30,19 @@ import vlmWorkerUrl from './workers/vlm-worker?worker&url';
 // Model catalog
 // ---------------------------------------------------------------------------
 
+/**
+ * The language model used whenever the user hasn't explicitly picked one in
+ * Settings. Previously this fell back to whichever registered model had the
+ * smallest `memoryRequirement` (see useModelLoader.ts), which silently
+ * selected the weakest model (lfm2-350m) for chat/notes/flashcards/quiz.
+ * Centralizing the default here makes it a one-line change instead of a
+ * sort-order side effect.
+ */
+export const DEFAULT_LANGUAGE_MODEL_ID = 'qwen2.5-3b-instruct-q4_k_m';
+
 const MODELS: CompactModelDef[] = [
-  // LLM — Liquid AI LFM2 350M (small + fast for chat)
+  // LLM — Liquid AI LFM2 350M (small + fast, lowest quality — kept as a
+  // lightweight option for constrained devices, no longer the default)
   {
     id: 'lfm2-350m-q4_k_m',
     name: 'LFM2 350M Q4_K_M',
@@ -50,6 +61,18 @@ const MODELS: CompactModelDef[] = [
     framework: LLMFramework.LlamaCpp,
     modality: ModelCategory.Language,
     memoryRequirement: 800_000_000,
+  },
+  // LLM — Qwen2.5 3B Instruct (strongest local option: best coherence,
+  // instruction-following, and reasoning of the three; ~2GB download).
+  // This is the default language model — see DEFAULT_LANGUAGE_MODEL_ID.
+  {
+    id: 'qwen2.5-3b-instruct-q4_k_m',
+    name: 'Qwen2.5 3B Instruct Q4_K_M',
+    repo: 'Qwen/Qwen2.5-3B-Instruct-GGUF',
+    files: ['qwen2.5-3b-instruct-q4_k_m.gguf'],
+    framework: LLMFramework.LlamaCpp,
+    modality: ModelCategory.Language,
+    memoryRequirement: 2_100_000_000,
   },
   // VLM — Liquid AI LFM2-VL 450M (vision + language)
   {

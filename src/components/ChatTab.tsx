@@ -17,6 +17,32 @@ interface ChatTabProps extends HistoryReporter {
   onPinAnswer?: (entry: { prompt: string; response: string }) => void;
 }
 
+const CHAT_SYSTEM_PROMPT =
+  'You are StudyBox-AI, a focused study assistant running locally in the browser. ' +
+  'Give clear, accurate, well-organized answers suited to a student. ' +
+  'Prefer concise explanations over padding, use examples when they help understanding, ' +
+  'and say so plainly if you are not sure about something rather than guessing.';
+
+// How many prior turns (user+assistant pairs) to fold into the prompt as
+// context. Keeps responses coherent across a conversation without sending
+// unbounded history into a small local context window.
+const MAX_HISTORY_TURNS = 6;
+
+/** Builds a single prompt string containing recent conversation turns plus the new message. */
+function buildPromptWithHistory(history: Message[], newMessage: string): string {
+  const recent = history
+    .filter((message) => message.text.trim())
+    .slice(-MAX_HISTORY_TURNS * 2);
+
+  if (recent.length === 0) return newMessage;
+
+  const transcript = recent
+    .map((message) => `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.text}`)
+    .join('\n');
+
+  return `${transcript}\nUser: ${newMessage}\nAssistant:`;
+}
+
 export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTabProps) {
   const loader = useModelLoader(ModelCategory.Language, false, languageModelId);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -25,6 +51,10 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
   const cancelRef = useRef<(() => void) | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  // Stable count of messages appended so far. Using a ref instead of
+  // `messages.length` avoids relying on a stale closure value to compute the
+  // index of the assistant bubble being streamed into.
+  const messageCountRef = useRef(0);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
@@ -50,10 +80,15 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
 
     setInput('');
     inputRef.current?.focus();
+
+    const historyForPrompt = messages;
+    const prompt = buildPromptWithHistory(historyForPrompt, text);
+
     setMessages((prev) => [...prev, { role: 'user', text }]);
     setGenerating(true);
 
-    const assistantIdx = messages.length + 1;
+    const assistantIdx = messageCountRef.current + 1;
+    messageCountRef.current += 2; // user message + assistant message
     setMessages((prev) => [...prev, { role: 'assistant', text: '' }]);
 
     try {
@@ -64,9 +99,13 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
         }
       }
 
-      const { stream, result: resultPromise, cancel } = await TextGeneration.generateStream(text, {
-        maxTokens: 256,
-        temperature: 0.45,
+      const { stream, result: resultPromise, cancel } = await TextGeneration.generateStream(prompt, {
+        maxTokens: 512,
+        temperature: 0.5,
+        topP: 0.9,
+        topK: 40,
+        systemPrompt: CHAT_SYSTEM_PROMPT,
+        stopSequences: ['\nUser:', '\nAssistant:'],
       });
       cancelRef.current = cancel;
 
@@ -77,7 +116,7 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
       }
 
       const result = await resultPromise;
-      const finalText = result.text || accumulated;
+      const finalText = (result.text || accumulated).trim();
       const statsSummary = `${result.tokensUsed} tokens - ${result.tokensPerSecond.toFixed(1)} tok/s - ${result.latencyMs.toFixed(0)}ms`;
 
       setAssistantMessage(assistantIdx, {
@@ -94,7 +133,7 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
       cancelRef.current = null;
       setGenerating(false);
     }
-  }, [input, generating, messages.length, loader, onHistoryEntry, setAssistantMessage]);
+  }, [input, generating, messages, loader, onHistoryEntry, setAssistantMessage]);
 
   const handleCancel = () => {
     cancelRef.current?.();
