@@ -92,7 +92,10 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
 
     try {
       const result = await pipeline.processTurn(audioData, {
-        maxTokens: 40,
+        // 40 tokens (~30 words) was borderline for "1-2 sentences" and more
+        // likely to clip mid-sentence now that the default LLM is larger and
+        // tends to be more verbose than the previous default.
+        maxTokens: 80,
         temperature: 0.45,
         systemPrompt: 'You are a helpful voice assistant. Keep responses concise - 1-2 sentences max.',
       }, {
