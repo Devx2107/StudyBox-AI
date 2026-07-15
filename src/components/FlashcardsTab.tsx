@@ -115,16 +115,14 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
     setBusy(true);
     setGenerationMessage(null);
     try {
-      if (loader.state !== 'ready') {
-        const ok = await loader.ensure();
-        if (!ok) {
-          const fallbackCards = buildFallbackFlashcards(sourceText);
-          setCards(fallbackCards);
-          setActiveIndex(0);
-          setIsFlipped(false);
-          setGenerationMessage(loader.error || 'AI model could not be loaded, so a fallback deck was created from your source text.');
-          return;
-        }
+      const ok = await loader.ensure();
+      if (!ok) {
+        const fallbackCards = buildFallbackFlashcards(sourceText);
+        setCards(fallbackCards);
+        setActiveIndex(0);
+        setIsFlipped(false);
+        setGenerationMessage(loader.error || 'AI model could not be loaded, so a fallback deck was created from your source text.');
+        return;
       }
 
       const { stream, result } = await TextGeneration.generateStream(

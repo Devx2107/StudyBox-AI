@@ -34,10 +34,8 @@ export function SmartNotesTab({ history, selectedHistory, notes, languageModelId
   const runSummary = async (mode: 'append' | 'replace') => {
     if (!recentContext.trim() || busy) return;
 
-    if (loader.state !== 'ready') {
-      const ok = await loader.ensure();
-      if (!ok) return;
-    }
+    const ok = await loader.ensure();
+    if (!ok) return;
 
     setBusy(true);
     try {

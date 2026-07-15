@@ -99,11 +99,9 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
     setGenerating(true);
 
     try {
-      if (loader.state !== 'ready') {
-        const ok = await loader.ensure();
-        if (!ok) {
-          throw new Error(loader.error || 'Could not load the local LLM.');
-        }
+      const ok = await loader.ensure();
+      if (!ok) {
+        throw new Error(loader.error || 'Could not load the local LLM.');
       }
 
       const { stream, result: resultPromise, cancel } = await TextGeneration.generateStream(prompt, {

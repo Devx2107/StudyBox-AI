@@ -202,11 +202,9 @@ export function VisionTab({ onHistoryEntry, visionModelId }: VisionTabProps) {
     height: number,
     maxTokens: number,
   ) => {
-    if (loader.state !== 'ready') {
-      const ok = await loader.ensure();
-      if (!ok) {
-        throw new Error(loader.error || 'Could not load the local VLM.');
-      }
+    const ok = await loader.ensure();
+    if (!ok) {
+      throw new Error(loader.error || 'Could not load the local VLM.');
     }
 
     const bridge = VLMWorkerBridge.shared;

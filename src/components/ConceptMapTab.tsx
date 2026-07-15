@@ -252,15 +252,13 @@ export function ConceptMapTab({ history, selectedHistory, notes, languageModelId
     setBusy(true);
     setGenerationMessage(null);
     try {
-      if (loader.state !== 'ready') {
-        const ok = await loader.ensure();
-        if (!ok) {
-          const fallbackMap = buildFallbackMap(sourceText);
-          setMap(fallbackMap);
-          setActiveNodeId(fallbackMap.nodes[0]?.id ?? null);
-          setGenerationMessage(loader.error || 'AI model could not be loaded, so a fallback concept map was created from your source text.');
-          return;
-        }
+      const ok = await loader.ensure();
+      if (!ok) {
+        const fallbackMap = buildFallbackMap(sourceText);
+        setMap(fallbackMap);
+        setActiveNodeId(fallbackMap.nodes[0]?.id ?? null);
+        setGenerationMessage(loader.error || 'AI model could not be loaded, so a fallback concept map was created from your source text.');
+        return;
       }
 
       const { stream, result } = await TextGeneration.generateStream(

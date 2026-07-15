@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { VoicePipeline, ModelCategory, ModelManager, AudioCapture, AudioPlayback, SpeechActivity } from '@runanywhere/web';
+import { VoicePipeline, ModelCategory, AudioCapture, AudioPlayback, SpeechActivity } from '@runanywhere/web';
 import { VAD } from '@runanywhere/web-onnx';
 import { useModelLoader } from '../hooks/useModelLoader';
 import { ModelBanner } from './ModelBanner';
@@ -170,15 +170,8 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
     setResponse('');
     setError(null);
 
-    const anyMissing = !ModelManager.getLoadedModel(ModelCategory.Audio)
-      || !ModelManager.getLoadedModel(ModelCategory.SpeechRecognition)
-      || !ModelManager.getLoadedModel(ModelCategory.Language)
-      || !ModelManager.getLoadedModel(ModelCategory.SpeechSynthesis);
-
-    if (anyMissing) {
-      const ok = await ensureModels();
-      if (!ok) return;
-    }
+    const ok = await ensureModels();
+    if (!ok) return;
 
     setVoiceState('listening');
     lastVisualLevelRef.current = 0;

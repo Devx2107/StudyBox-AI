@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { ModelManager, ModelCategory, EventBus } from '@runanywhere/web';
 import { DEFAULT_LANGUAGE_MODEL_ID } from '../runanywhere';
 
@@ -9,6 +9,36 @@ interface ModelLoaderResult {
   progress: number;
   error: string | null;
   ensure: () => Promise<boolean>;
+}
+
+type RegisteredModel = ReturnType<typeof ModelManager.getModels>[number];
+const modelLoadLocks = new Map<string, Promise<boolean>>();
+
+function getLoadLockKey(category: ModelCategory) {
+  return String(category);
+}
+
+function getTargetModel(category: ModelCategory, preferredModelId?: string): RegisteredModel | null {
+  const models = ModelManager.getModels().filter((model) => model.modality === category);
+  if (models.length === 0) return null;
+
+  const byId = (id: string) => models.find((candidate) => candidate.id === id);
+  const lightest = [...models].sort(
+    (a, b) => (a.memoryRequirement ?? Number.MAX_SAFE_INTEGER) - (b.memoryRequirement ?? Number.MAX_SAFE_INTEGER),
+  )[0];
+
+  return (
+    (preferredModelId ? byId(preferredModelId) : null) ??
+    (category === ModelCategory.Language ? byId(DEFAULT_LANGUAGE_MODEL_ID) : null) ??
+    lightest
+  );
+}
+
+function isTargetModelLoaded(category: ModelCategory, preferredModelId?: string) {
+  const targetModel = getTargetModel(category, preferredModelId);
+  const loadedModel = ModelManager.getLoadedModel(category);
+
+  return Boolean(targetModel && loadedModel?.id === targetModel.id);
 }
 
 /**
@@ -25,62 +55,65 @@ export function useModelLoader(
   preferredModelId?: string,
 ): ModelLoaderResult {
   const [state, setState] = useState<LoaderState>(() =>
-    ModelManager.getLoadedModel(category) ? 'ready' : 'idle',
+    isTargetModelLoaded(category, preferredModelId) ? 'ready' : 'idle',
   );
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const loadingRef = useRef(false);
+
+  useEffect(() => {
+    const nextState = isTargetModelLoaded(category, preferredModelId) ? 'ready' : 'idle';
+    setState((current) => (
+      current === 'downloading' || current === 'loading' || current === nextState
+        ? current
+        : nextState
+    ));
+    if (nextState === 'ready') {
+      setError(null);
+    }
+  }, [category, preferredModelId]);
 
   const ensure = useCallback(async (): Promise<boolean> => {
-    const loadedModel = ModelManager.getLoadedModel(category);
+    const model = getTargetModel(category, preferredModelId);
 
-    // Already loaded
-    if (loadedModel && (!preferredModelId || loadedModel.id === preferredModelId)) {
+    if (!model) {
+      setError(`No ${category} model registered`);
+      setState('error');
+      return false;
+    }
+
+    if (isTargetModelLoaded(category, preferredModelId)) {
+      setError(null);
       setState('ready');
       return true;
     }
 
-    // A load is already in flight (e.g. called twice in quick succession,
-    // such as a double-click). Wait for it instead of immediately reporting
-    // failure — the caller would otherwise see a spurious "could not load"
-    // error even though the model is actively loading successfully.
-    if (loadingRef.current) {
-      while (loadingRef.current) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-      const nowLoaded = ModelManager.getLoadedModel(category);
-      if (nowLoaded && (!preferredModelId || nowLoaded.id === preferredModelId)) {
-        setState('ready');
-        return true;
-      }
-      return false;
-    }
-    loadingRef.current = true;
-
-    try {
-      const models = ModelManager.getModels().filter((m) => m.modality === category);
-      if (models.length === 0) {
-        setError(`No ${category} model registered`);
+    const loadLockKey = getLoadLockKey(category);
+    const activeLoad = modelLoadLocks.get(loadLockKey);
+    if (activeLoad) {
+      setState('loading');
+      let ok = false;
+      try {
+        ok = await activeLoad;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
         setState('error');
         return false;
       }
 
-      // Selection priority:
-      // 1. An explicitly requested model id (preferredModelId)
-      // 2. The category-wide default (e.g. DEFAULT_LANGUAGE_MODEL_ID for
-      //    Language), if it's registered
-      // 3. The lightest registered model, as a last-resort fallback so the
-      //    app still works if the default isn't present in this category
-      const byId = (id: string) => models.find((candidate) => candidate.id === id);
-      const lightest = [...models].sort(
-        (a, b) => (a.memoryRequirement ?? Number.MAX_SAFE_INTEGER) - (b.memoryRequirement ?? Number.MAX_SAFE_INTEGER),
-      )[0];
+      if (isTargetModelLoaded(category, preferredModelId)) {
+        setError(null);
+        setState('ready');
+        return true;
+      }
 
-      const model =
-        (preferredModelId ? byId(preferredModelId) : null) ??
-        (category === ModelCategory.Language ? byId(DEFAULT_LANGUAGE_MODEL_ID) : null) ??
-        lightest;
+      if (!ok) {
+        setError('Failed to load model');
+        setState('error');
+        return false;
+      }
+    }
 
+    const loadPromise = (async () => {
       // Download if needed
       if (model.status !== 'downloaded' && model.status !== 'loaded') {
         setState('downloading');
@@ -100,20 +133,30 @@ export function useModelLoader(
       // Load
       setState('loading');
       const ok = await ModelManager.loadModel(model.id, { coexist });
+      return ok;
+    })();
+
+    modelLoadLocks.set(loadLockKey, loadPromise);
+
+    try {
+      const ok = await loadPromise;
       if (ok) {
+        setError(null);
         setState('ready');
         return true;
-      } else {
-        setError('Failed to load model');
-        setState('error');
-        return false;
       }
+
+      setError('Failed to load model');
+      setState('error');
+      return false;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setState('error');
       return false;
     } finally {
-      loadingRef.current = false;
+      if (modelLoadLocks.get(loadLockKey) === loadPromise) {
+        modelLoadLocks.delete(loadLockKey);
+      }
     }
   }, [category, coexist, preferredModelId]);
 

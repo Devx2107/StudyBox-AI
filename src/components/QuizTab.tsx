@@ -291,15 +291,13 @@ export function QuizTab({ history, selectedHistory, notes, languageModelId, onHi
     setBusy(true);
     setGenerationMessage(null);
     try {
-      if (loader.state !== 'ready') {
-        const ok = await loader.ensure();
-        if (!ok) {
-          const fallbackQuiz = buildFallbackQuiz(sourceText, questionCount);
-          setQuiz(fallbackQuiz);
-          resetSessionState();
-          setGenerationMessage(loader.error || 'AI model could not be loaded, so a fallback quiz was created from your source text.');
-          return;
-        }
+      const ok = await loader.ensure();
+      if (!ok) {
+        const fallbackQuiz = buildFallbackQuiz(sourceText, questionCount);
+        setQuiz(fallbackQuiz);
+        resetSessionState();
+        setGenerationMessage(loader.error || 'AI model could not be loaded, so a fallback quiz was created from your source text.');
+        return;
       }
 
       const { stream, result } = await TextGeneration.generateStream(
