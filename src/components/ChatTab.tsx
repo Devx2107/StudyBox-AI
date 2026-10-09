@@ -1,15 +1,17 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { ModelCategory } from '@runanywhere/web';
-import { TextGeneration } from '@runanywhere/web-llamacpp';
+import { generateTextStream } from '../lib/textGeneration';
 import { useModelLoader } from '../hooks/useModelLoader';
 import { ModelBanner } from './ModelBanner';
 import { MarkdownContent } from './MarkdownContent';
 import type { HistoryReporter } from '../types/history';
+import { useReducedMotion } from '../hooks/useMotion';
 
 interface Message {
   role: 'user' | 'assistant';
   text: string;
   stats?: { summary: string };
+  streamId?: number;
 }
 
 interface ChatTabProps extends HistoryReporter {
@@ -58,6 +60,11 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [generating, setGenerating] = useState(false);
+  const reducedMotion = useReducedMotion();
+  const streamIdRef = useRef(0);
+  const mountedRef = useRef(true);
+  const generationRef = useRef(false);
+  const cancelledRef = useRef(false);
   // Cumulative input+output tokens spent across this conversation so far.
   // Approximate: it tracks what's actually been sent/generated through this
   // UI, not a live read of the model's internal KV cache state.
@@ -71,8 +78,14 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
   const messageCountRef = useRef(0);
 
   useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messages]);
+    const list = listRef.current;
+    if (list) list.scrollTo({ top: list.scrollHeight, behavior: reducedMotion || generating ? 'auto' : 'smooth' });
+  }, [messages, reducedMotion, generating]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; cancelledRef.current = true; cancelRef.current?.(); };
+  }, []);
 
   useEffect(() => {
     if (!generating) {
@@ -81,9 +94,10 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
   }, [generating]);
 
   const setAssistantMessage = useCallback((assistantIdx: number, message: Message) => {
+    if (!mountedRef.current) return;
     setMessages((prev) => {
       const updated = [...prev];
-      updated[assistantIdx] = message;
+      updated[assistantIdx] = { ...message, streamId: message.streamId ?? updated[assistantIdx]?.streamId ?? streamIdRef.current };
       return updated;
     });
   }, []);
@@ -97,14 +111,19 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
   const runGeneration = useCallback(async (historyForPrompt: Message[], userText: string, assistantIdx: number) => {
     const prompt = buildPromptWithHistory(historyForPrompt, userText);
     setGenerating(true);
+    generationRef.current = true;
+    cancelledRef.current = false;
+    const streamId = ++streamIdRef.current;
+    setAssistantMessage(assistantIdx, { role: 'assistant', text: '', streamId });
 
     try {
       const ok = await loader.ensure();
+      if (!mountedRef.current || cancelledRef.current) return;
       if (!ok) {
-        throw new Error(loader.error || 'Could not load the local LLM.');
+        throw new Error(loader.getError() || 'Could not load the local LLM.');
       }
 
-      const { stream, result: resultPromise, cancel } = await TextGeneration.generateStream(prompt, {
+      const { stream, result: resultPromise, cancel } = await generateTextStream(prompt, {
         maxTokens: 512,
         temperature: 0.5,
         topP: 0.9,
@@ -113,14 +132,17 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
         stopSequences: ['\nUser:', '\nAssistant:'],
       });
       cancelRef.current = cancel;
+      if (!mountedRef.current || cancelledRef.current) { cancel(); return; }
 
       let accumulated = '';
       for await (const token of stream) {
+        if (!mountedRef.current || cancelledRef.current) break;
         accumulated += token;
         setAssistantMessage(assistantIdx, { role: 'assistant', text: accumulated });
       }
 
       const result = await resultPromise;
+      if (!mountedRef.current || cancelledRef.current) return;
       const finalText = (result.text || accumulated).trim();
       const statsSummary = `${result.tokensUsed} tokens - ${result.tokensPerSecond.toFixed(1)} tok/s - ${result.latencyMs.toFixed(0)}ms`;
       setContextTokensUsed((prev) => prev + result.inputTokens + result.tokensUsed);
@@ -132,18 +154,20 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
       });
       onHistoryEntry?.({ source: 'chat', prompt: userText, response: finalText });
     } catch (err) {
+      if (!mountedRef.current || cancelledRef.current) return;
       const msg = err instanceof Error ? err.message : String(err);
       setAssistantMessage(assistantIdx, { role: 'assistant', text: `Error: ${msg}` });
       onHistoryEntry?.({ source: 'chat', prompt: userText, response: `Error: ${msg}` });
     } finally {
       cancelRef.current = null;
-      setGenerating(false);
+      generationRef.current = false;
+      if (mountedRef.current) setGenerating(false);
     }
   }, [loader, onHistoryEntry, setAssistantMessage]);
 
   const send = useCallback(async () => {
     const text = input.trim();
-    if (!text || generating) return;
+    if (!text || generationRef.current) return;
 
     setInput('');
     inputRef.current?.focus();
@@ -165,7 +189,7 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
    * same message slot rather than appending a new one.
    */
   const regenerate = useCallback(async () => {
-    if (generating || messages.length < 2) return;
+    if (generationRef.current || messages.length < 2) return;
 
     const lastAssistantIdx = messages.length - 1;
     const lastMessage = messages[lastAssistantIdx];
@@ -181,7 +205,9 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
   }, [generating, messages, runGeneration, setAssistantMessage]);
 
   const handleCancel = () => {
+    cancelledRef.current = true;
     cancelRef.current?.();
+    setGenerating(false);
   };
 
   const conversationText = messages
@@ -318,8 +344,12 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
                   ) : (
                     <MarkdownContent
                       className="markdown-content chat-markdown"
-                      content={msg.text || '...'}
+                      content={msg.text}
+                      motion={msg.streamId ? { id: msg.streamId, active: generating && i === messages.length - 1 } : undefined}
                     />
+                  )}
+                  {msg.role === 'assistant' && generating && i === messages.length - 1 && (
+                    <span className="stream-cursor" role="status" aria-label="Generating response" />
                   )}
                   {msg.stats && (
                     <div className="message-stats">
@@ -359,15 +389,12 @@ export function ChatTab({ onHistoryEntry, languageModelId, onPinAnswer }: ChatTa
             value={input}
             onChange={(e) => setInput(e.target.value)}
           />
-          {generating ? (
-            <button type="button" className="send-btn" onClick={handleCancel}>
-              Stop
-            </button>
-          ) : (
-            <button type="submit" className="send-btn" disabled={!input.trim()}>
-              Send
-            </button>
-          )}
+          <button type={generating ? 'button' : 'submit'} className={`send-btn ${generating ? 'is-generating' : ''}`}
+            onClick={generating ? handleCancel : undefined} disabled={!generating && !input.trim()}
+            aria-label={generating ? 'Stop generation' : 'Send message'}>
+            <span className="send-label" aria-hidden="true">Send</span>
+            <span className="stop-label" aria-hidden="true">Stop</span>
+          </button>
         </form>
       </div>
     </section>

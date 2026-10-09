@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ModelCategory } from '@runanywhere/web';
-import { TextGeneration } from '@runanywhere/web-llamacpp';
+import { generateTextStream } from '../lib/textGeneration';
+import { useGenerationTask } from '../hooks/useGenerationTask';
 import { useModelLoader } from '../hooks/useModelLoader';
 import { ModelBanner } from './ModelBanner';
 import { collectStudyFragments, extractJsonCandidates } from '../lib/studyOutput';
@@ -73,10 +74,12 @@ function buildFallbackFlashcards(sourceText: string): Flashcard[] {
 
 export function FlashcardsTab({ history, selectedHistory, notes, languageModelId, onCardsGenerated }: FlashcardsTabProps) {
   const loader = useModelLoader(ModelCategory.Language, false, languageModelId);
+  const generation = useGenerationTask();
   const [cards, setCards] = useState<Flashcard[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [deckVersion, setDeckVersion] = useState(0);
   const [generationMessage, setGenerationMessage] = useState<string | null>(null);
   const defaultSource = useMemo(() => {
     if (selectedHistory) {
@@ -111,23 +114,27 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
 
   const generateCards = async () => {
     if (!sourceText.trim() || busy) return;
+    const task = generation.start();
+    if (!task) return;
 
     setBusy(true);
     setGenerationMessage(null);
     try {
       const ok = await loader.ensure();
+      if (task.signal.aborted) return;
       if (!ok) {
         const fallbackCards = buildFallbackFlashcards(sourceText);
         setCards(fallbackCards);
         setActiveIndex(0);
         setIsFlipped(false);
-        setGenerationMessage(loader.error || 'AI model could not be loaded, so a fallback deck was created from your source text.');
+        setGenerationMessage(loader.getError() || 'AI model could not be loaded, so a fallback deck was created from your source text.');
         return;
       }
 
-      const { stream, result } = await TextGeneration.generateStream(
+      const { stream, result } = await generateTextStream(
         `Create ${FLASHCARD_COUNT} study flashcards from this material. Return only JSON in this shape: [{"front":"question","back":"answer"}]. Keep each side short.\n\n${sourceText}`,
         { maxTokens: 520, temperature: 0.3 },
+        task.signal,
       );
 
       let accumulated = '';
@@ -135,6 +142,7 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
         accumulated += token;
       }
       const final = (await result).text || accumulated;
+      if (task.signal.aborted) return;
       const nextCards = parseFlashcards(final);
       if (nextCards.length) {
         setCards(nextCards);
@@ -148,6 +156,7 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
       setActiveIndex(0);
       setIsFlipped(false);
     } catch (error) {
+      if (task.signal.aborted) return;
       const fallbackCards = buildFallbackFlashcards(sourceText);
       const message = error instanceof Error ? error.message : String(error);
       setCards(fallbackCards);
@@ -156,7 +165,11 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
       setIsFlipped(false);
       setGenerationMessage(`AI generation failed, so a fallback deck was created. ${message}`);
     } finally {
-      setBusy(false);
+      generation.finish(task);
+      if (!task.signal.aborted) {
+        setBusy(false);
+        setDeckVersion((version) => version + 1);
+      }
     }
   };
 
@@ -195,16 +208,22 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
       />
 
       <div className="card-body flashcards-layout">
-        <div className="flashcards-main">
+        <div className={`flashcards-main ${busy ? 'is-generating' : ''}`}>
           {activeCard ? (
             <>
-              <div className="flashcard-area">
+              <div className={`flashcard-area ${busy ? 'deck-generating' : 'deck-ready'}`} key={deckVersion} aria-busy={busy}>
+                <div className="deck-stack-layer deck-stack-far" aria-hidden="true" />
+                <div className="deck-stack-layer deck-stack-near" aria-hidden="true" />
+                <div className="deck-progress" role="progressbar" aria-label="Deck position" aria-valuemin={0}
+                  aria-valuemax={cards.length} aria-valuenow={activeIndex + 1}>
+                  <div className="deck-progress-fill" style={{ width: `${((activeIndex + 1) / cards.length) * 100}%` }} />
+                </div>
                 <button
                   className="flashcard-arrow flashcard-arrow-left"
                   type="button"
                   onClick={goToPrevious}
                   aria-label="Previous flashcard"
-                  disabled={cards.length < 2}
+                  disabled={busy || cards.length < 2}
                 >
                   ‹
                 </button>
@@ -212,8 +231,11 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
                   className={`study-flashcard ${isFlipped ? 'flipped' : ''}`}
                   type="button"
                   onClick={flipCard}
+                  aria-label={`${isFlipped ? 'Answer' : 'Question'}: ${isFlipped ? activeCard.back : activeCard.front}. Activate to ${isFlipped ? 'show question' : 'reveal answer'}.`}
+                  aria-pressed={isFlipped}
+                  disabled={busy}
                 >
-                  <div className="card-face">
+                  <div className="card-face" aria-hidden={isFlipped}>
                     <div className="card-core">
                       <div className="card-face-label">Question</div>
                       <div className="card-face-text">{activeCard.front}</div>
@@ -221,7 +243,7 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
                     </div>
                     <div className="flashcard-counter">{activeIndex + 1} / {cards.length}</div>
                   </div>
-                  <div className="card-back">
+                  <div className="card-back" aria-hidden={!isFlipped}>
                     <div className="card-core">
                       <div className="card-face-label">Answer</div>
                       <div className="card-back-text">{activeCard.back}</div>
@@ -235,7 +257,7 @@ export function FlashcardsTab({ history, selectedHistory, notes, languageModelId
                   type="button"
                   onClick={goToNext}
                   aria-label="Next flashcard"
-                  disabled={cards.length < 2}
+                  disabled={busy || cards.length < 2}
                 >
                   ›
                 </button>

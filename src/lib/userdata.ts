@@ -1,3 +1,5 @@
+import { createSnapshotPersistence } from './snapshotPersistence';
+
 // Public types so App.tsx and other consumers can import them.
 export interface ProfileStatsConfig {
   userName: string;
@@ -135,15 +137,35 @@ function calculateTotalXp(stats: {
 const WRITE_ENDPOINT = '/__userdata';
 const DATA_FILE = '/userdata.json';
 
+function browserStorage(): Storage | null {
+  try { return globalThis.localStorage ?? null; } catch { return null; }
+}
+
+const persistence = createSnapshotPersistence({
+  storage: browserStorage(),
+  storageKey: 'studybox-userdata-recovery',
+  write: async (snapshot) => (await fetch(WRITE_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: snapshot,
+  })).ok,
+});
+
 /**
- * Load user data from the local file served by the dev server (or a prod static host).
+ * Recover unsaved browser changes, or load the file served by the dev/static host.
  * Falls back to DEFAULT_USERDATA gracefully.
  */
 export async function loadUserData(): Promise<UserData> {
   try {
-    const res = await fetch(`${DATA_FILE}?_=${Date.now()}`, { cache: 'no-store' });
-    if (!res.ok) return { ...DEFAULT_USERDATA };
-    const raw = await res.json() as Partial<UserData>;
+    let raw: Partial<UserData>;
+    const recovered = persistence.restore();
+    if (recovered) {
+      raw = recovered;
+    } else {
+      const res = await fetch(`${DATA_FILE}?_=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) return { ...DEFAULT_USERDATA };
+      raw = await res.json() as Partial<UserData>;
+    }
     const achievements = Array.isArray(raw.achievements)
       ? raw.achievements
         .filter((achievement): achievement is UserData['achievements'][number] => (
@@ -223,23 +245,10 @@ export async function loadUserData(): Promise<UserData> {
   }
 }
 
-// Debounced save — only the latest snapshot within 800ms window is written.
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
-
 /**
- * Persist user data back to disk via the Vite dev-server write endpoint.
- * The save is debounced to avoid hammering the disk on every keystroke.
+ * Save a browser recovery copy immediately, then debounce the dev-server disk write.
+ * Static deployments retain the browser copy because they have no write endpoint.
  */
 export function saveUserData(data: UserData): void {
-  if (saveTimer !== null) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    saveTimer = null;
-    fetch(WRITE_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data, null, 2),
-    }).catch(() => {
-      // Silently ignore — happens in prod builds where the endpoint doesn't exist.
-    });
-  }, 800);
+  persistence.save(data);
 }

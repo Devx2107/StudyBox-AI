@@ -19,8 +19,9 @@ import {
   type CompactModelDef,
 } from '@runanywhere/web';
 
-import { LlamaCPP, VLMWorkerBridge } from '@runanywhere/web-llamacpp';
+import { LlamaCPP, LlamaCppBridge, TextGeneration, VLMWorkerBridge } from '@runanywhere/web-llamacpp';
 import { ONNX } from '@runanywhere/web-onnx';
+import { createLocalLlmLoader } from './lib/localLlmLoader';
 
 // Vite bundles the worker as a standalone JS chunk and returns its URL.
 // @ts-ignore — Vite-specific ?worker&url query
@@ -32,17 +33,15 @@ import vlmWorkerUrl from './workers/vlm-worker?worker&url';
 
 /**
  * The language model used whenever the user hasn't explicitly picked one in
- * Settings. Previously this fell back to whichever registered model had the
- * smallest `memoryRequirement` (see useModelLoader.ts), which silently
- * selected the weakest model (lfm2-350m) for chat/notes/flashcards/quiz.
- * Centralizing the default here makes it a one-line change instead of a
- * sort-order side effect.
+ * Settings. Use the small model for a lower browser-memory footprint. The
+ * larger models remain explicit choices for devices that can load them.
+ * Model download size is not the total runtime memory requirement.
  */
-export const DEFAULT_LANGUAGE_MODEL_ID = 'qwen2.5-3b-instruct-q4_k_m';
+export const DEFAULT_LANGUAGE_MODEL_ID = 'lfm2-350m-q4_k_m';
 
 const MODELS: CompactModelDef[] = [
   // LLM — Liquid AI LFM2 350M (small + fast, lowest quality — kept as a
-  // lightweight option for constrained devices, no longer the default)
+  // default for browser compatibility; larger models remain opt-in)
   {
     id: 'lfm2-350m-q4_k_m',
     name: 'LFM2 350M Q4_K_M',
@@ -64,7 +63,7 @@ const MODELS: CompactModelDef[] = [
   },
   // LLM — Qwen2.5 3B Instruct (strongest local option: best coherence,
   // instruction-following, and reasoning of the three; ~2GB download).
-  // This is the default language model — see DEFAULT_LANGUAGE_MODEL_ID.
+  // Opt-in: the file plus inference allocations may exceed browser memory.
   {
     id: 'qwen2.5-3b-instruct-q4_k_m',
     name: 'Qwen2.5 3B Instruct Q4_K_M',
@@ -135,6 +134,7 @@ export async function initSDK(): Promise<void> {
 
     // Step 2: Register backends (loads WASM automatically)
     await LlamaCPP.register();
+    ModelManager.setLLMLoader(createLocalLlmLoader(TextGeneration, LlamaCppBridge.shared));
     await ONNX.register();
 
     // Step 3: Register model catalog

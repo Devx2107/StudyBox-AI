@@ -1,12 +1,16 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, type CSSProperties } from 'react';
 import { VoicePipeline, ModelCategory, AudioCapture, AudioPlayback, SpeechActivity } from '@runanywhere/web';
 import { VAD } from '@runanywhere/web-onnx';
 import { useModelLoader } from '../hooks/useModelLoader';
 import { ModelBanner } from './ModelBanner';
 import { MarkdownContent } from './MarkdownContent';
 import type { HistoryReporter } from '../types/history';
+import { useReducedMotion } from '../hooks/useMotion';
+import { useGenerationTask } from '../hooks/useGenerationTask';
+import { startMediaCapture } from '../lib/mediaCapture';
+import { processVoiceTurn } from '../lib/voicePlayback';
 
-type VoiceState = 'idle' | 'loading-models' | 'listening' | 'processing' | 'speaking';
+type VoiceState = 'idle' | 'loading-models' | 'starting-mic' | 'listening' | 'processing' | 'speaking';
 
 interface VoiceTabProps extends HistoryReporter {
   languageModelId?: string;
@@ -32,11 +36,19 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
   const sttLoader = useModelLoader(ModelCategory.SpeechRecognition, true);
   const ttsLoader = useModelLoader(ModelCategory.SpeechSynthesis, true);
   const vadLoader = useModelLoader(ModelCategory.Audio, true);
+  const listeningTask = useGenerationTask();
+  const speechTask = useGenerationTask();
 
   const [voiceState, setVoiceState] = useState<VoiceState>('idle');
   const [transcript, setTranscript] = useState('');
   const [response, setResponse] = useState('');
   const [audioLevel, setAudioLevel] = useState(0);
+  const reducedMotion = useReducedMotion();
+  const reducedMotionRef = useRef(reducedMotion);
+  reducedMotionRef.current = reducedMotion;
+  const mountedRef = useRef(true);
+  const micFrameRef = useRef(0);
+  const playbackRef = useRef<AudioPlayback | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const micRef = useRef<AudioCapture | null>(null);
@@ -47,20 +59,25 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
 
   const stopPlaybackAnimation = useCallback(() => {
     if (playbackAnimRef.current !== null) {
-      window.clearInterval(playbackAnimRef.current);
+      cancelAnimationFrame(playbackAnimRef.current);
       playbackAnimRef.current = null;
     }
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
       micRef.current?.stop();
       vadUnsub.current?.();
+      pipelineRef.current?.cancel();
+      cancelAnimationFrame(micFrameRef.current);
+      playbackRef.current?.dispose();
       stopPlaybackAnimation();
     };
   }, [stopPlaybackAnimation]);
 
-  const ensureModels = useCallback(async (): Promise<boolean> => {
+  const ensureModels = useCallback(async (signal?: AbortSignal): Promise<boolean> => {
     setVoiceState('loading-models');
     setError(null);
 
@@ -70,46 +87,62 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
       llmLoader.ensure(),
       ttsLoader.ensure(),
     ]);
+    if (!mountedRef.current || signal?.aborted) return false;
 
     if (results.every(Boolean)) {
       setVoiceState('idle');
       return true;
     }
 
-    setError('Failed to load one or more voice models');
+    setError([vadLoader, sttLoader, llmLoader, ttsLoader]
+      .filter((_, index) => !results[index])
+      .map((loader) => loader.getError() || 'A voice model could not be loaded.')
+      .join('\n'));
     setVoiceState('idle');
     return false;
   }, [vadLoader, sttLoader, llmLoader, ttsLoader]);
 
   const processSpeech = useCallback(async (audioData: Float32Array) => {
-    const pipeline = pipelineRef.current;
-    if (!pipeline) return;
+    const task = speechTask.start();
+    if (!task) return;
+    // A cancelled turn may finish STT/TTS later; keep its cancellation handle
+    // separate from the next turn's pipeline.
+    const pipeline = new VoicePipeline();
+    pipelineRef.current = pipeline;
+    const cancel = () => pipeline.cancel();
+    task.signal.addEventListener('abort', cancel, { once: true });
     let latestTranscript = '';
 
     micRef.current?.stop();
+    micRef.current = null;
     vadUnsub.current?.();
+    vadUnsub.current = null;
+    cancelAnimationFrame(micFrameRef.current);
+    micFrameRef.current = 0;
     setVoiceState('processing');
 
     try {
-      const result = await pipeline.processTurn(audioData, {
-        // 40 tokens (~30 words) was borderline for "1-2 sentences" and more
-        // likely to clip mid-sentence now that the default LLM is larger and
-        // tends to be more verbose than the previous default.
+      const result = await processVoiceTurn(pipeline, audioData, {
+        // Leave enough room for one or two complete spoken sentences.
         maxTokens: 80,
         temperature: 0.45,
         systemPrompt: 'You are a helpful voice assistant. Keep responses concise - 1-2 sentences max.',
       }, {
         onTranscription: (text) => {
+          task.signal.throwIfAborted();
           latestTranscript = text;
           setTranscript(text);
         },
         onResponseToken: (_token, accumulated) => {
+          if (task.signal.aborted) { pipeline.cancel(); return; }
           setResponse(accumulated);
         },
         onResponseComplete: (text) => {
+          task.signal.throwIfAborted();
           setResponse(text);
         },
         onSynthesisComplete: async (audio, sampleRate) => {
+          task.signal.throwIfAborted();
           setVoiceState('speaking');
           const chunkSize = Math.max(512, Math.floor(sampleRate * 0.05));
           const envelope = Array.from({ length: Math.max(1, Math.ceil(audio.length / chunkSize)) }, (_, index) => {
@@ -119,31 +152,40 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
           });
 
           stopPlaybackAnimation();
-          let envelopeIndex = 0;
-          playbackAnimRef.current = window.setInterval(() => {
+          const started = performance.now();
+          let previousIndex = -1;
+          const sampleEnvelope = (now: number) => {
+            if (task.signal.aborted || reducedMotionRef.current) { stopPlaybackAnimation(); return; }
+            const envelopeIndex = Math.floor((now - started) / (chunkSize / sampleRate * 1000));
+            if (envelopeIndex >= envelope.length) { stopPlaybackAnimation(); return; }
             const rawLevel = envelope[envelopeIndex] ?? 0;
             const nextLevel = Math.max(0.08, rawLevel);
             lastVisualLevelRef.current = nextLevel;
-            setAudioLevel(nextLevel);
-            envelopeIndex += 1;
-            if (envelopeIndex >= envelope.length) {
-              stopPlaybackAnimation();
-            }
-          }, 50);
+            if (envelopeIndex !== previousIndex) setAudioLevel(nextLevel);
+            previousIndex = envelopeIndex;
+            playbackAnimRef.current = requestAnimationFrame(sampleEnvelope);
+          };
+          if (!reducedMotionRef.current) playbackAnimRef.current = requestAnimationFrame(sampleEnvelope);
 
           const player = new AudioPlayback({ sampleRate });
-          await player.play(audio, sampleRate);
-          player.dispose();
-          stopPlaybackAnimation();
-          setAudioLevel(0);
+          playbackRef.current = player;
+          try { await player.play(audio, sampleRate); }
+          finally {
+            player.dispose();
+            if (playbackRef.current === player) {
+              playbackRef.current = null;
+              stopPlaybackAnimation();
+              if (!task.signal.aborted) setAudioLevel(0);
+            }
+          }
         },
         onStateChange: (s) => {
-          if (s === 'processingSTT' || s === 'generatingResponse') setVoiceState('processing');
-          if (s === 'playingTTS') setVoiceState('speaking');
+          task.signal.throwIfAborted();
+          if (s === 'processingSTT' || s === 'generatingResponse' || s === 'playingTTS') setVoiceState('processing');
         },
       });
 
-      if (result) {
+      if (result && !task.signal.aborted) {
         setTranscript(result.transcription);
         setResponse(result.response);
         onHistoryEntry?.({
@@ -153,69 +195,85 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
         });
       }
     } catch (err) {
+      if (task.signal.aborted) return;
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
       const prompt = latestTranscript.trim();
       if (prompt) {
         onHistoryEntry?.({ source: 'voice', prompt, response: `Error: ${msg}` });
       }
+    } finally {
+      if (task.signal.aborted) pipeline.cancel();
+      task.signal.removeEventListener('abort', cancel);
+      speechTask.finish(task);
+      if (!task.signal.aborted) { setVoiceState('idle'); setAudioLevel(0); }
     }
-
-    setVoiceState('idle');
-    setAudioLevel(0);
-  }, [onHistoryEntry]);
+  }, [onHistoryEntry, speechTask, stopPlaybackAnimation]);
 
   const startListening = useCallback(async () => {
+    const task = listeningTask.start();
+    if (!task) return;
     setTranscript('');
     setResponse('');
     setError(null);
 
-    const ok = await ensureModels();
-    if (!ok) return;
-
-    setVoiceState('listening');
-    lastVisualLevelRef.current = 0;
-
-    const mic = new AudioCapture({ sampleRate: 16000 });
-    micRef.current = mic;
-
-    if (!pipelineRef.current) {
-      pipelineRef.current = new VoicePipeline();
-    }
-
-    VAD.reset();
-
-    vadUnsub.current = VAD.onSpeechActivity((activity) => {
-      if (activity === SpeechActivity.Ended) {
-        const segment = VAD.popSpeechSegment();
-        if (segment && segment.samples.length > 1600) {
-          void processSpeech(segment.samples);
+    try {
+      const ok = await ensureModels(task.signal);
+      if (!ok || task.signal.aborted) return;
+      setVoiceState('starting-mic');
+      lastVisualLevelRef.current = 0;
+      const mic = new AudioCapture({ sampleRate: 16000 });
+      micRef.current = mic;
+      VAD.reset();
+      vadUnsub.current = VAD.onSpeechActivity((activity) => {
+        if (activity === SpeechActivity.Ended && mountedRef.current && micRef.current === mic) {
+          const segment = VAD.popSpeechSegment();
+          if (segment && segment.samples.length > 1600) void processSpeech(segment.samples);
         }
-      }
-    });
-
-    await mic.start(
-      (chunk) => {
+      });
+      await startMediaCapture(mic, task.signal, (chunk) => {
+        if (!mountedRef.current || task.signal.aborted || micRef.current !== mic) return;
         VAD.processSamples(chunk);
         const rawLevel = computeSignalLevel(chunk);
-        const smoothedLevel = rawLevel > lastVisualLevelRef.current
-          ? rawLevel
-          : lastVisualLevelRef.current * 0.72 + rawLevel * 0.28;
-        lastVisualLevelRef.current = smoothedLevel;
-        setAudioLevel(smoothedLevel);
-      },
-      () => {},
-    );
-  }, [ensureModels, processSpeech]);
+        lastVisualLevelRef.current = rawLevel > lastVisualLevelRef.current
+          ? rawLevel : lastVisualLevelRef.current * 0.72 + rawLevel * 0.28;
+        if (reducedMotionRef.current) return;
+        if (!micFrameRef.current) micFrameRef.current = requestAnimationFrame(() => {
+          micFrameRef.current = 0;
+          if (mountedRef.current && !task.signal.aborted && micRef.current === mic) setAudioLevel(lastVisualLevelRef.current);
+        });
+      }, () => {});
+      if (task.signal.aborted) { mic.stop(); return; }
+      setVoiceState('listening');
+    } catch (err) {
+      if (task.signal.aborted) return;
+      micRef.current?.stop();
+      vadUnsub.current?.();
+      vadUnsub.current = null;
+      setError(err instanceof Error ? err.message : String(err));
+      setVoiceState('idle');
+      setAudioLevel(0);
+    } finally {
+      listeningTask.finish(task);
+    }
+  }, [ensureModels, listeningTask, processSpeech]);
 
   const stopListening = useCallback(() => {
+    listeningTask.cancel();
+    speechTask.cancel();
     micRef.current?.stop();
+    micRef.current = null;
     vadUnsub.current?.();
+    vadUnsub.current = null;
+    playbackRef.current?.dispose();
+    playbackRef.current = null;
     stopPlaybackAnimation();
+    cancelAnimationFrame(micFrameRef.current);
+    micFrameRef.current = 0;
     lastVisualLevelRef.current = 0;
     setVoiceState('idle');
     setAudioLevel(0);
-  }, [stopPlaybackAnimation]);
+  }, [listeningTask, speechTask, stopPlaybackAnimation]);
 
   const pendingLoaders = [
     { label: 'VAD', loader: vadLoader },
@@ -227,6 +285,7 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
   const voiceStatusLabel = (
     voiceState === 'idle' ? 'Stopped'
       : voiceState === 'loading-models' ? 'Loading models...'
+        : voiceState === 'starting-mic' ? 'Waiting for microphone permission...'
         : voiceState === 'listening' ? 'Listening... speak now'
           : voiceState === 'processing' ? 'Processing...'
             : 'Speaking...'
@@ -235,7 +294,7 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
   const visualLevel = voiceState === 'idle' || voiceState === 'loading-models'
     ? 0
     : audioLevel;
-  const waveProfile = [0.18, 0.28, 0.42, 0.58, 0.76, 0.94, 1, 0.94, 0.76, 0.58, 0.42, 0.28, 0.18];
+  const waveProfile = [0.18, 0.28, 0.42, 0.58, 0.76, 1, 0.76, 0.58, 0.42, 0.28, 0.18];
   const waveBars = waveProfile.map((profile, index) => {
     const baseHeight = 14 + profile * 14;
     const activeLift = visualLevel * (10 + profile * 54);
@@ -253,12 +312,12 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
         <div className="card-badge">{voiceState}</div>
       </div>
 
-      {pendingLoaders.length > 0 && voiceState === 'idle' && (
+      {pendingLoaders.length > 0 && (voiceState === 'idle' || voiceState === 'loading-models') && (
         <ModelBanner
           state={pendingLoaders[0].loader.state}
           progress={pendingLoaders[0].loader.progress}
           error={pendingLoaders[0].loader.error}
-          onLoad={ensureModels}
+          onLoad={() => { void ensureModels(); }}
           label={`Voice (${pendingLoaders.map((l) => l.label).join(', ')})`}
         />
       )}
@@ -268,27 +327,28 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
           <div className="result-panel">
             <div className="result-panel-header">Voice error</div>
             <div className="result-panel-body">
-              <span className="error-text">{error}</span>
+              <span className="error-text" role="alert">{error}</span>
             </div>
           </div>
         )}
 
         <div className="voice-grid">
           <div className="voice-center">
-            <div className="waveform" aria-hidden="true">
+            <div className={`waveform ${voiceState === 'listening' ? 'is-recording' : ''}`} aria-hidden="true">
+              {voiceState === 'listening' && <div className="recording-rings"><span /><span /><span /></div>}
               {waveBars.map((bar) => (
                 <span
                   key={bar.key}
                   className="wave-bar"
                   style={{
-                    height: `${bar.height}px`,
+                    '--wave-height': `${bar.height}px`,
                     opacity: bar.opacity,
-                  }}
+                  } as CSSProperties}
                 />
               ))}
             </div>
 
-            <p className="voice-status">{voiceStatusLabel}</p>
+            <p className="voice-status" role="status">{voiceState === 'speaking' && <span className="speaking-dot" aria-hidden="true" />}{voiceStatusLabel}</p>
 
             {voiceState === 'idle' || voiceState === 'loading-models' ? (
               <button
@@ -299,11 +359,11 @@ export function VoiceTab({ onHistoryEntry, languageModelId }: VoiceTabProps) {
               >
                 Start Listening
               </button>
-            ) : voiceState === 'listening' ? (
+            ) : (
               <button className="btn pink" onClick={stopListening} type="button">
                 Stop
               </button>
-            ) : null}
+            )}
           </div>
 
           <div className="info-block voice-pipeline-block">

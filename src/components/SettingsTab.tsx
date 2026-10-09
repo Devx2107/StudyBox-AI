@@ -132,7 +132,7 @@ export function SettingsTab({
                 onChange={onPreferredLanguageModelChange}
                 ariaLabel="Language model"
                 options={[
-                  { value: '', label: 'Auto-select (recommended: Qwen2.5 3B)' },
+                  { value: '', label: 'Auto-select (lightweight: LFM2 350M)' },
                   ...languageModels.map((model) => ({ value: model.id, label: model.label })),
                 ]}
               />
@@ -152,7 +152,7 @@ export function SettingsTab({
             </label>
 
             <p className="provider-note">These preferences affect local chat, notes, flashcards, quizzes, concept maps, voice response generation, and vision analysis.</p>
-            <p className="provider-note">On auto, all of these use the Qwen2.5 3B model by default for the most reliable responses. Switch to a smaller model if downloads or generation feel too slow on your device.</p>
+            <p className="provider-note">Auto uses LFM2 350M for lower memory use. Larger models can give better responses but need more browser memory than their download size. If loading fails with an allocation error, select LFM2 350M, refresh the page to release memory, and load again.</p>
           </div>
         </div>
 

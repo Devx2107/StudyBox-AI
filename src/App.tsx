@@ -10,6 +10,8 @@ import { ConceptMapTab } from "./components/ConceptMapTab";
 import { SettingsTab } from "./components/SettingsTab";
 import { ProfileTab } from "./components/ProfileTab";
 import { MarkdownContent } from "./components/MarkdownContent";
+import { AchievementToast, type AchievementNotice } from "./components/AchievementToast";
+import { useReducedMotion, useTabTransition } from "./hooks/useMotion";
 import type { HistoryEntry, HistorySource } from "./types/history";
 import { loadUserData, saveUserData, DEFAULT_USERDATA, type XpUpdate } from "./lib/userdata";
 
@@ -279,6 +281,15 @@ export function App() {
   const [sdkReady, setSdkReady] = useState(false);
   const [sdkError, setSdkError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<(typeof tabs)[number]["id"]>("chat");
+  const tabMotion = useTabTransition(activeTab);
+  const reducedMotion = useReducedMotion();
+  const displayedTab = tabMotion.displayed;
+  const [dataHydrated, setDataHydrated] = useState(false);
+  const [achievementQueue, setAchievementQueue] = useState<AchievementNotice[]>([]);
+  const seenAchievementsRef = useRef<Set<string> | null>(null);
+  const profileMotionRef = useRef({ xp: 0, streak: 0 });
+  const rememberProfileMotion = useCallback((values: { xp: number; streak: number }) => { profileMotionRef.current = values; }, []);
+  const dismissAchievement = useCallback(() => setAchievementQueue((queue) => queue.slice(1)), []);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [historySourceFilter, setHistorySourceFilter] = useState<"all" | HistorySource>("all");
   const [historySearch, setHistorySearch] = useState("");
@@ -314,8 +325,8 @@ export function App() {
   const lastAutoplaySourceRef = useRef<PomodoroMusicSource | null>(null);
   const lastPomodoroRunningRef = useRef(false);
 
-  const currentTab = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
-  const showSupportSection = activeTab !== "profile" && activeTab !== "settings" && activeTab !== "quiz";
+  const currentTab = tabs.find((tab) => tab.id === displayedTab) ?? tabs[0];
+  const showSupportSection = displayedTab !== "profile" && displayedTab !== "settings" && displayedTab !== "quiz";
   const accelerationMode = sdkReady ? getAccelerationMode() : null;
   const historySourceOptions = useMemo(() => {
     const presentSources = new Set(history.map((entry) => entry.source));
@@ -352,6 +363,21 @@ export function App() {
     { id: "xp-1000", label: "1000 XP", unlocked: xp >= 1000 },
   ];
   const unlockedAchievementIds = achievements.filter((achievement) => achievement.unlocked).map((achievement) => achievement.id);
+  const achievementKey = unlockedAchievementIds.join('|');
+  useEffect(() => {
+    if (!dataHydrated) return;
+    if (!seenAchievementsRef.current) {
+      seenAchievementsRef.current = new Set(unlockedAchievementIds);
+      return;
+    }
+    const fresh = unlockedAchievementIds.filter((id) => !seenAchievementsRef.current!.has(id));
+    if (!fresh.length) return;
+    fresh.forEach((id) => seenAchievementsRef.current!.add(id));
+    setAchievementQueue((queue) => [...queue, ...fresh.map((id) => {
+      const configured = profileStats.achievements.find((achievement) => achievement.id === id);
+      return configured ?? { id, label: achievements.find((achievement) => achievement.id === id)!.label };
+    })]);
+  }, [dataHydrated, achievementKey, profileStats.achievements]);
 
   useEffect(() => {
     const sourceEntries = (["lofi", "rain"] as const).map((source) => {
@@ -597,7 +623,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!window.matchMedia("(pointer: fine)").matches) return undefined;
+    if (reducedMotion || !window.matchMedia("(pointer: fine)").matches) return undefined;
 
     const mainCursor = document.createElement("div");
     const trailCursor = document.createElement("div");
@@ -702,7 +728,7 @@ export function App() {
       mainCursor.remove();
       trailCursor.remove();
     };
-  }, []);
+  }, [reducedMotion]);
 
   // ── Single unified load from userdata.json ──────────────────────────────
   useEffect(() => {
@@ -759,6 +785,8 @@ export function App() {
       setNotes(data.notes);
       setActivityDays(normalizeActivityDays(data.activityDays));
       setPinnedAnswers(data.pinnedAnswers);
+      profileMotionRef.current = { xp: data.totalXp, streak: getStreak(data.activityDays) };
+      setDataHydrated(true);
     });
     return () => { cancelled = true; };
   }, []);
@@ -1049,7 +1077,8 @@ export function App() {
   }
 
   return (
-    <div className="app-shell" data-theme={theme}>
+    <div className="app-shell motion-page" data-theme={theme}>
+      {achievementQueue[0] && <AchievementToast key={achievementQueue[0].id} notice={achievementQueue[0]} onDone={dismissAchievement} />}
       <header>
         <div className="logo-block">
           <div className="logo-icon">S</div>
@@ -1243,11 +1272,12 @@ export function App() {
       </div>
 
       <div className="content full-page">
-        <div className="main-stack">
-          {activeTab === "chat" && <ChatTab onHistoryEntry={addHistoryEntry} languageModelId={preferredLanguageModelId || undefined} onPinAnswer={addPinnedAnswer} />}
-          {activeTab === "vision" && <VisionTab onHistoryEntry={addHistoryEntry} visionModelId={preferredVisionModelId || undefined} />}
-          {activeTab === "voice" && <VoiceTab onHistoryEntry={addHistoryEntry} languageModelId={preferredLanguageModelId || undefined} />}
-          {activeTab === "notes" && (
+        <div className={`main-stack motion-tab motion-${tabMotion.phase}`} key={displayedTab}
+          onAnimationEnd={tabMotion.onAnimationEnd} inert={tabMotion.phase === 'exiting' || undefined}>
+          {displayedTab === "chat" && <ChatTab onHistoryEntry={addHistoryEntry} languageModelId={preferredLanguageModelId || undefined} onPinAnswer={addPinnedAnswer} />}
+          {displayedTab === "vision" && <VisionTab onHistoryEntry={addHistoryEntry} visionModelId={preferredVisionModelId || undefined} />}
+          {displayedTab === "voice" && <VoiceTab onHistoryEntry={addHistoryEntry} languageModelId={preferredLanguageModelId || undefined} />}
+          {displayedTab === "notes" && (
             <SmartNotesTab
               history={history}
               selectedHistory={selectedHistory}
@@ -1256,7 +1286,7 @@ export function App() {
               onNotesChange={setNotes}
             />
           )}
-          {activeTab === "flashcards" && (
+          {displayedTab === "flashcards" && (
             <FlashcardsTab
               history={history}
               selectedHistory={selectedHistory}
@@ -1272,7 +1302,7 @@ export function App() {
               }}
             />
           )}
-          {activeTab === "quiz" && (
+          {displayedTab === "quiz" && (
             <QuizTab
               history={history}
               selectedHistory={selectedHistory}
@@ -1281,14 +1311,16 @@ export function App() {
               onHistoryEntry={addHistoryEntry}
             />
           )}
-          {activeTab === "map" && (
+          {displayedTab === "map" && (
             <ConceptMapTab history={history} selectedHistory={selectedHistory} notes={notes} languageModelId={preferredLanguageModelId || undefined} />
           )}
-          {activeTab === "profile" && (
+          {displayedTab === "profile" && dataHydrated && (
             <ProfileTab
               profile={profileStats}
               streak={streak}
               xp={xp}
+              initialMotionValues={profileMotionRef.current}
+              onMotionValuesChange={rememberProfileMotion}
               historyCount={history.length}
               completedPomodoros={completedPomodoros}
               activityStats={{
@@ -1304,7 +1336,7 @@ export function App() {
               onUpdateUserName={(name) => setProfileStats((prev) => ({ ...prev, userName: name }))}
             />
           )}
-          {activeTab === "settings" && (
+          {displayedTab === "settings" && (
             <SettingsTab
               theme={theme}
               themes={[...themes]}

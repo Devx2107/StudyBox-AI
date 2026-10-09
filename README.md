@@ -62,7 +62,9 @@ Most user-facing state is stored in `public/userdata.json` during local developm
 - pomodoro settings
 - pinned answers
 
-In dev mode, the Vite config exposes a local `POST /__userdata` endpoint that writes changes back to `public/userdata.json`. In production, the app still reads `userdata.json`, but the dev-only write endpoint is not available.
+In dev mode, the Vite config exposes a local `POST /__userdata` endpoint that writes changes back to `public/userdata.json`. Changes are also saved immediately to a browser recovery copy, so refreshing before the delayed disk write does not discard recent edits. A successful disk write clears its matching recovery copy.
+
+In production, `userdata.json` supplies the initial values and changes remain in browser storage because the dev-only write endpoint is unavailable. Browser storage is local to that browser and site; clearing it removes that recovery copy. If browser storage is unavailable, development disk saves still work.
 
 ## Project Structure
 
@@ -116,7 +118,7 @@ You can add or replace models by editing the `MODELS` array in `src/runanywhere.
 npm run build
 ```
 
-The Vite config copies the required WASM runtime assets into `dist/assets` during production builds.
+The Vite config copies the required WASM runtime assets into `dist/assets` during production builds. Run `npm test` for model-loading, cancellation, media cleanup, voice playback, and persistence regression checks.
 
 ## Deployment
 
@@ -148,6 +150,19 @@ Cross-Origin-Embedder-Policy: credentialless
 - The first run can take time because models are downloaded locally.
 - Voice and vision features depend on browser permissions and supported hardware/runtime acceleration.
 - The production app is static; the editable `userdata.json` write flow is a local-development convenience.
+
+### Model allocation errors
+
+`Array buffer allocation failed` means the browser could not allocate memory
+while loading the model. Qwen2.5 3B Q4_K_M has a roughly 2.1 GB model file;
+loading can also need an in-memory file copy, weights, and inference buffers.
+Download size is not the total memory requirement.
+
+Auto uses LFM2 350M for a smaller memory footprint. If an explicitly selected
+model fails, choose **Settings → Language model → LFM2 350M Q4_K_M**, refresh
+the page to release the failed allocation, and load the model again. The larger
+models remain available in Settings. Temporary inference files are cleaned up
+on failure and unload; downloaded browser-cache files and study data are kept.
 
 ## License
 

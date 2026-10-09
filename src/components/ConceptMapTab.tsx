@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { ModelCategory } from '@runanywhere/web';
-import { TextGeneration } from '@runanywhere/web-llamacpp';
+import { generateTextStream } from '../lib/textGeneration';
+import { useGenerationTask } from '../hooks/useGenerationTask';
 import { useModelLoader } from '../hooks/useModelLoader';
 import { ModelBanner } from './ModelBanner';
 import { MarkdownContent } from './MarkdownContent';
@@ -209,12 +210,15 @@ function positionConceptMap(map: ConceptMap): PositionedNode[] {
 }
 
 export function ConceptMapTab({ history, selectedHistory, notes, languageModelId }: ConceptMapTabProps) {
-  // No tab-specific override needed: useModelLoader now defaults every
-  // Language-category caller to DEFAULT_LANGUAGE_MODEL_ID (currently the
-  // Qwen2.5 3B model) unless languageModelId is explicitly set in Settings.
+  // Use the same preferred/default language model as the other study tabs.
   const loader = useModelLoader(ModelCategory.Language, false, languageModelId);
+  const generation = useGenerationTask();
   const [busy, setBusy] = useState(false);
   const [map, setMap] = useState<ConceptMap | null>(null);
+  const maskId = useId().replace(/[^a-zA-Z0-9_-]/g, '');
+  const mapVersion = useRef(0);
+  const lastMap = useRef(map);
+  if (lastMap.current !== map) { lastMap.current = map; mapVersion.current += 1; }
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [generationMessage, setGenerationMessage] = useState<string | null>(null);
   const seedText = useMemo(() => {
@@ -248,20 +252,23 @@ export function ConceptMapTab({ history, selectedHistory, notes, languageModelId
 
   const generateMap = async () => {
     if (!sourceText.trim() || busy) return;
+    const task = generation.start();
+    if (!task) return;
 
     setBusy(true);
     setGenerationMessage(null);
     try {
       const ok = await loader.ensure();
+      if (task.signal.aborted) return;
       if (!ok) {
         const fallbackMap = buildFallbackMap(sourceText);
         setMap(fallbackMap);
         setActiveNodeId(fallbackMap.nodes[0]?.id ?? null);
-        setGenerationMessage(loader.error || 'AI model could not be loaded, so a fallback concept map was created from your source text.');
+        setGenerationMessage(loader.getError() || 'AI model could not be loaded, so a fallback concept map was created from your source text.');
         return;
       }
 
-      const { stream, result } = await TextGeneration.generateStream(
+      const { stream, result } = await generateTextStream(
         `Create a study concept map for the topic or material below.
 If the input is short, like "quadratic equations", expand it into the main ideas a student should study.
 Return valid JSON only. Do not use markdown fences or extra commentary.
@@ -275,6 +282,7 @@ Rules:
 \n\nTopic or study material:
 ${sourceText}`,
         { maxTokens: 900, temperature: 0.25 },
+        task.signal,
       );
 
       let accumulated = '';
@@ -282,6 +290,7 @@ ${sourceText}`,
         accumulated += token;
       }
       const final = (await result).text || accumulated;
+      if (task.signal.aborted) return;
       const parsedMap = parseConceptMap(final);
       const nextMap = parsedMap ?? buildFallbackMap(sourceText);
       setMap(nextMap);
@@ -290,13 +299,15 @@ ${sourceText}`,
         setGenerationMessage('The AI response was incomplete, so a fallback concept map was created from your source text.');
       }
     } catch (error) {
+      if (task.signal.aborted) return;
       const fallbackMap = buildFallbackMap(sourceText);
       const message = error instanceof Error ? error.message : String(error);
       setMap(fallbackMap);
       setActiveNodeId(fallbackMap.nodes[0]?.id ?? null);
       setGenerationMessage(`AI generation failed, so a fallback concept map was created. ${message}`);
     } finally {
-      setBusy(false);
+      generation.finish(task);
+      if (!task.signal.aborted) setBusy(false);
     }
   };
 
@@ -323,10 +334,21 @@ ${sourceText}`,
         <div className="concept-map-main">
           {map ? (
             <>
-              <div className="mindmap-canvas">
+              <div className="mindmap-canvas" key={mapVersion.current}>
                 <div className="mindmap-grid" />
                 <svg viewBox="0 0 100 100" preserveAspectRatio="none">
-                  {map.edges.map((edge) => {
+                  <defs>
+                    {map.edges.map((edge, index) => {
+                      const from = nodeMap[edge.from];
+                      const to = nodeMap[edge.to];
+                      if (!from || !to) return null;
+                      return <mask key={index} id={`edge-${maskId}-${index}`} maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
+                        <line className="motion-map-edge" x1={from.x} y1={from.y} x2={to.x} y2={to.y}
+                          pathLength={1} stroke="white" strokeWidth={2} strokeDasharray="1" strokeDashoffset={0} />
+                      </mask>;
+                    })}
+                  </defs>
+                  {map.edges.map((edge, index) => {
                     const from = nodeMap[edge.from];
                     const to = nodeMap[edge.to];
                     if (!from || !to) return null;
@@ -340,16 +362,17 @@ ${sourceText}`,
                         stroke={to.type === 'leaf' ? '#00f5d4' : '#ffe600'}
                         strokeWidth={to.type === 'leaf' ? 0.4 : 0.7}
                         strokeDasharray={to.type === 'leaf' ? '1.5 1' : undefined}
+                        mask={`url(#edge-${maskId}-${index})`}
                       />
                     );
                   })}
                 </svg>
 
-                {positionedNodes.map((node) => (
+                {positionedNodes.map((node, index) => (
                   <button
                     key={node.id}
                     className={`mindmap-node node-${node.type} ${activeNodeId === node.id ? 'active' : ''}`}
-                    style={{ left: `${node.x}%`, top: `${node.y}%` }}
+                    style={{ left: `${node.x}%`, top: `${node.y}%`, '--motion-index': index } as CSSProperties}
                     type="button"
                     onClick={() => setActiveNodeId(node.id)}
                   >

@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ModelCategory } from '@runanywhere/web';
-import { TextGeneration } from '@runanywhere/web-llamacpp';
+import { generateTextStream } from '../lib/textGeneration';
+import { useGenerationTask } from '../hooks/useGenerationTask';
 import { useModelLoader } from '../hooks/useModelLoader';
 import { ModelBanner } from './ModelBanner';
 import { MarkdownContent } from './MarkdownContent';
 import { AppSelect } from './AppSelect';
 import { collectStudyFragments, extractJsonCandidates } from '../lib/studyOutput';
 import type { HistoryEntry, HistoryReporter } from '../types/history';
+import { motionDuration, useAnimatedNumber } from '../hooks/useMotion';
 
 type Difficulty = 'easy' | 'medium' | 'hard';
 
@@ -231,6 +233,7 @@ function getResultLabel(score: number, total: number) {
 
 export function QuizTab({ history, selectedHistory, notes, languageModelId, onHistoryEntry }: QuizTabProps) {
   const loader = useModelLoader(ModelCategory.Language, false, languageModelId);
+  const generation = useGenerationTask();
   const defaultSource = useMemo(() => {
     if (selectedHistory) return `Prompt: ${selectedHistory.prompt}\nResponse: ${selectedHistory.response}`;
     if (notes.trim()) return notes;
@@ -247,6 +250,14 @@ export function QuizTab({ history, selectedHistory, notes, languageModelId, onHi
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [revealed, setRevealed] = useState(false);
   const [score, setScore] = useState(0);
+  const displayedScore = Math.round(useAnimatedNumber(score));
+  const answerLockedRef = useRef(false);
+  const finalTimerRef = useRef<number | null>(null);
+  const clearFinalTimer = () => {
+    if (finalTimerRef.current !== null) window.clearTimeout(finalTimerRef.current);
+    finalTimerRef.current = null;
+  };
+  useEffect(() => () => clearFinalTimer(), []);
   const [correctCount, setCorrectCount] = useState(0);
   const [wrongCount, setWrongCount] = useState(0);
   const [currentStreak, setCurrentStreak] = useState(0);
@@ -261,6 +272,8 @@ export function QuizTab({ history, selectedHistory, notes, languageModelId, onHi
   }, [defaultSource, sourceText]);
 
   const resetSessionState = () => {
+    clearFinalTimer();
+    answerLockedRef.current = false;
     setCurrentIndex(0);
     setSelectedIndex(null);
     setRevealed(false);
@@ -287,20 +300,23 @@ export function QuizTab({ history, selectedHistory, notes, languageModelId, onHi
 
   const generateQuiz = async () => {
     if (!sourceText.trim() || busy) return;
+    const task = generation.start();
+    if (!task) return;
 
     setBusy(true);
     setGenerationMessage(null);
     try {
       const ok = await loader.ensure();
+      if (task.signal.aborted) return;
       if (!ok) {
         const fallbackQuiz = buildFallbackQuiz(sourceText, questionCount);
         setQuiz(fallbackQuiz);
         resetSessionState();
-        setGenerationMessage(loader.error || 'AI model could not be loaded, so a fallback quiz was created from your source text.');
+        setGenerationMessage(loader.getError() || 'AI model could not be loaded, so a fallback quiz was created from your source text.');
         return;
       }
 
-      const { stream, result } = await TextGeneration.generateStream(
+      const { stream, result } = await generateTextStream(
         `Create exactly ${questionCount} ${difficulty} multiple-choice quiz questions from this study material.
 Return JSON only.
 Use this shape:
@@ -317,6 +333,7 @@ ${sourceText}`,
           maxTokens: questionCount <= 5 ? 900 : questionCount <= 10 ? 1800 : 2800,
           temperature: 0.25,
         },
+        task.signal,
       );
 
       let accumulated = '';
@@ -325,6 +342,7 @@ ${sourceText}`,
       }
 
       const final = (await result).text || accumulated;
+      if (task.signal.aborted) return;
       const parsedQuiz = parseQuiz(final, questionCount);
       const nextQuiz = parsedQuiz ?? buildFallbackQuiz(sourceText, questionCount);
       setQuiz(nextQuiz);
@@ -333,13 +351,15 @@ ${sourceText}`,
         setGenerationMessage('The AI response was incomplete, so a fallback quiz was created from your source text.');
       }
     } catch (error) {
+      if (task.signal.aborted) return;
       const fallbackQuiz = buildFallbackQuiz(sourceText, questionCount);
       const message = error instanceof Error ? error.message : String(error);
       setQuiz(fallbackQuiz);
       resetSessionState();
       setGenerationMessage(`AI generation failed, so a fallback quiz was created. ${message}`);
     } finally {
-      setBusy(false);
+      generation.finish(task);
+      if (!task.signal.aborted) setBusy(false);
     }
   };
 
@@ -356,7 +376,8 @@ ${sourceText}`,
   const progressWidth = quiz ? (answeredCount / quiz.questions.length) * 100 : 0;
 
   const answerQuestion = (index: number) => {
-    if (!currentQuestion || revealed) return;
+    if (!currentQuestion || answerLockedRef.current) return;
+    answerLockedRef.current = true;
 
     const correct = index === currentQuestion.answerIndex;
     const nextScore = score + (correct ? 1 : 0);
@@ -373,7 +394,10 @@ ${sourceText}`,
 
     const isLastQuestion = !!quiz && currentIndex === quiz.questions.length - 1;
     if (isLastQuestion && quiz) {
-      setQuizComplete(true);
+      finalTimerRef.current = window.setTimeout(() => {
+        finalTimerRef.current = null;
+        setQuizComplete(true);
+      }, motionDuration('--dur-quiz-final', 600));
       onHistoryEntry?.({
         source: 'quiz',
         prompt: `Quiz - ${quiz.title} (${difficulty}, ${quiz.questions.length} questions)`,
@@ -385,9 +409,9 @@ ${sourceText}`,
   const goToNext = () => {
     if (!quiz || !revealed) return;
     if (currentIndex >= quiz.questions.length - 1) {
-      setQuizComplete(true);
       return;
     }
+    answerLockedRef.current = false;
     setCurrentIndex((prev) => prev + 1);
     setSelectedIndex(null);
     setRevealed(false);
@@ -421,17 +445,17 @@ ${sourceText}`,
             <div className="quiz-panel">
               <div className="quiz-meta">
                 <span>Topic: {quiz.title}</span>
-                <span>Score: {score}/{quiz.questions.length}</span>
+                <span aria-label={`Score: ${score} of ${quiz.questions.length}`}>Score: <span aria-hidden="true">{displayedScore}/{quiz.questions.length}</span></span>
                 <span>Accuracy: {accuracy}</span>
               </div>
 
               <div className="quiz-score-bar">
-                <div className="quiz-score-fill" style={{ width: `${progressWidth}%` }} />
+                <div key={currentIndex} className={`quiz-score-fill ${revealed && selectedIndex === currentQuestion.answerIndex ? 'motion-correct-pulse' : ''}`} style={{ width: `${progressWidth}%` }} />
               </div>
 
-              <p className="quiz-q">{currentQuestion.question}</p>
+              <p className="quiz-q" key={currentIndex}>{currentQuestion.question}</p>
 
-              <div className="quiz-opts">
+              <div className="quiz-opts" key={currentIndex}>
                 {currentQuestion.options.map((option, index) => {
                   const isCorrect = revealed && index === currentQuestion.answerIndex;
                   const isWrong = revealed && selectedIndex === index && index !== currentQuestion.answerIndex;
@@ -444,6 +468,7 @@ ${sourceText}`,
                       type="button"
                       onClick={() => answerQuestion(index)}
                       disabled={revealed}
+                      style={{ '--motion-index': index } as React.CSSProperties}
                     >
                       <span className="quiz-opt-letter">{letter}</span>
                       <span className="quiz-opt-text">{option}</span>
@@ -462,8 +487,8 @@ ${sourceText}`,
               )}
 
               <div className="study-toolbar">
-                <button className="btn primary" type="button" onClick={goToNext} disabled={!revealed}>
-                  {quiz && currentIndex === quiz.questions.length - 1 ? 'See results' : 'Next question'}
+                <button className="btn primary" type="button" onClick={goToNext} disabled={!revealed || currentIndex === quiz.questions.length - 1}>
+                  {quiz && currentIndex === quiz.questions.length - 1 ? 'Showing results...' : 'Next question'}
                 </button>
                 <button className="btn primary quiz-toolbar-end" type="button" onClick={restartQuiz} disabled={!quiz}>
                   Restart
@@ -472,7 +497,7 @@ ${sourceText}`,
             </div>
           ) : quiz && quizComplete ? (
             <div className="quiz-result">
-              <div className="quiz-result-score">{score}/{quiz.questions.length}</div>
+              <div className="quiz-result-score">{displayedScore}/{quiz.questions.length}</div>
               <div className="quiz-result-label">{getResultLabel(score, quiz.questions.length)}</div>
               <p className="study-hint">
                 Correct {correctCount} of {quiz.questions.length} with {quiz.questions.length ? Math.round((score / quiz.questions.length) * 100) : 0}% accuracy.

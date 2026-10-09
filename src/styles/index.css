@@ -906,7 +906,7 @@ main.active {
 @keyframes msg-in {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translate(var(--msg-enter-x, 0px), 8px);
   }
 
   to {
@@ -1847,6 +1847,15 @@ footer {
   color: var(--pink);
   font-family: var(--mono);
   font-size: 12px;
+}
+
+.model-banner .error-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.model-banner .btn {
+  flex-shrink: 0;
 }
 
 .result-panel-body p {
@@ -4010,4 +4019,282 @@ body[data-theme='purple'] {
 
 .calendar-day {
   box-shadow: 2px 2px 0 var(--black);
+}
+
+/* === MOTION LAYER === */
+/* Shared timings. Structural rules also apply when motion is reduced. */
+:root {
+  --dur-fast: 150ms;
+  --dur-mid: 250ms;
+  --dur-slow: 400ms;
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --ease-motion: ease-out;
+  --motion-stagger: 50ms;
+  --motion-distance: 12px;
+  --dur-tab-out: 100ms;
+  --dur-tab-in: 200ms;
+  --tab-distance: 24px;
+  --dur-token: 80ms;
+  --dur-send: 120ms;
+  --dur-flip: 300ms;
+  --deck-stagger: 60ms;
+  --dur-shake: 200ms;
+  --dur-count: 250ms;
+  --dur-quiz-final: 600ms;
+  --dur-edge: 600ms;
+  --dur-wave: 100ms;
+  --dur-recording: 1200ms;
+  --dur-xp: 600ms;
+  --dur-streak: 400ms;
+  --dur-achievement-hold: 2000ms;
+}
+
+/* Global and model banner */
+.motion-tab.motion-exiting { pointer-events: none; }
+.model-banner-state {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: inherit;
+  flex-direction: inherit;
+  flex-wrap: inherit;
+  gap: inherit;
+}
+.motion-banner-out { pointer-events: none; }
+
+/* Chat and streaming Markdown */
+.msg.user { --msg-enter-x: 12px; }
+.msg.assistant { --msg-enter-x: -12px; }
+.stream-cursor {
+  display: inline-block;
+  width: .6em;
+  height: 1em;
+  vertical-align: text-bottom;
+  background: var(--yellow);
+}
+.send-btn { display: grid; place-items: center; }
+.send-label, .stop-label { grid-area: 1 / 1; }
+.stop-label, .is-generating .send-label { opacity: 0; }
+.is-generating .stop-label { opacity: 1; }
+.chat-input-row:focus-within { box-shadow: inset 0 0 0 2px var(--yellow); }
+.chat-input:focus-visible { box-shadow: inset 0 0 0 2px var(--yellow); }
+
+/* Flashcards: translate entry is independent of rotateY flip. */
+.flashcard-area { perspective: 1000px; isolation: isolate; }
+.study-flashcard { z-index: 1; }
+.deck-stack-layer {
+  position: absolute;
+  inset: 0;
+  border: var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  pointer-events: none;
+  z-index: -1;
+}
+.deck-stack-far { inset: 8px 0 0 8px; }
+.deck-stack-near { inset: 4px 0 0 4px; }
+.deck-progress {
+  position: absolute;
+  bottom: 1rem;
+  left: 1.5rem;
+  right: 1.5rem;
+  height: 8px;
+  border: var(--border);
+  background: var(--surface-2);
+  overflow: hidden;
+  z-index: 2;
+  pointer-events: none;
+}
+.deck-progress-fill { height: 100%; background: var(--cyan); }
+.flashcard-arrow { z-index: 3; }
+
+/* Smart notes: retain the editor's exact footprint, including resizing. */
+.notes-editor-shell { position: relative; }
+.notes-editor-shell > textarea { display: block; }
+.notes-editor-shell.is-generating > textarea { visibility: hidden; }
+.notes-stream-preview {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  resize: none;
+}
+.notes-skeleton .skeleton-line {
+  height: 1em;
+  margin-bottom: 1em;
+  background: var(--surface-2);
+}
+.notes-skeleton .skeleton-line:nth-child(2) { width: 85%; }
+.notes-skeleton .skeleton-line:nth-child(3) { width: 65%; }
+
+/* Concept map */
+.motion-map-edge { stroke-dashoffset: 0; }
+
+/* Voice: rings are decorative and stay within the existing waveform. */
+.waveform { position: relative; }
+.wave-bar { height: var(--wave-height, 12px); z-index: 1; }
+.recording-rings { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+.recording-rings span {
+  position: absolute;
+  width: 96px;
+  height: 96px;
+  border: var(--border);
+  border-color: var(--yellow);
+  border-radius: 50%;
+  opacity: .35;
+}
+.speaking-dot { display: inline-block; width: 8px; height: 8px; margin-right: .5em; background: var(--cyan); }
+
+/* Vision */
+.vision-analysis-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  border: var(--border);
+  border-color: var(--yellow);
+}
+.vision-analysis-overlay span {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  background: var(--yellow);
+  color: var(--black);
+  font-family: var(--mono);
+}
+.vision-analysis-overlay::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--yellow);
+}
+
+/* Profile and queued achievement notifications */
+.streak-number { display: inline-flex; vertical-align: bottom; }
+.streak-digit-window { height: 1.5em; line-height: 1.5; overflow: hidden; }
+.streak-digit-strip { display: flex; flex-direction: column; transform: translateY(calc(var(--roll-steps, 0) * -1.5em)); }
+.streak-digit-strip > span { height: 1.5em; flex-shrink: 0; }
+.achievement-toast {
+  position: fixed;
+  top: calc(var(--header-offset) + 1rem);
+  right: 1rem;
+  width: min(320px, calc(100vw - 2rem));
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  border: var(--border);
+  box-shadow: var(--shadow);
+  background: var(--surface);
+  color: var(--black);
+  padding: 1rem;
+  font-family: var(--body);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  /* Global */
+  .motion-page { animation: motion-fade-in var(--dur-mid) var(--ease-motion); }
+  .motion-tab.motion-entering { animation: motion-tab-in var(--dur-tab-in) var(--ease-motion) both; }
+  .motion-tab.motion-exiting { animation: motion-tab-out var(--dur-tab-out) ease-in both; }
+  .model-banner-state { animation: motion-fade-in var(--dur-fast) var(--ease-motion); }
+  .model-banner.motion-banner-out { animation: motion-banner-out var(--dur-fast) ease-in both; }
+  .progress-fill { transition: width var(--dur-slow) ease; }
+  .btn:not(:disabled), .deck-item:not(:disabled), .nav-tab {
+    transition: transform var(--dur-fast) var(--ease-spring), box-shadow var(--dur-fast) var(--ease-spring), background var(--dur-fast) ease, color var(--dur-fast) ease;
+  }
+
+  /* Chat */
+  .msg { animation: msg-in var(--dur-tab-in) var(--ease-spring) backwards; }
+  .motion-token { animation: motion-fade-in var(--dur-token) ease-out backwards; animation-delay: var(--motion-elapsed, 0ms); }
+  .stream-cursor { animation: blink 1s step-end infinite; }
+  .send-label, .stop-label { transition: opacity var(--dur-send) ease-out; }
+  .chat-input-row, .chat-input { transition: box-shadow var(--dur-fast) ease-out; }
+
+  /* Flashcards */
+  .study-flashcard { transition: transform var(--dur-flip) var(--ease-motion), filter var(--dur-fast) ease, opacity var(--dur-fast) ease; }
+  .deck-ready .study-flashcard { animation: motion-deck-in var(--dur-mid) var(--ease-spring) backwards; }
+  .deck-ready .deck-stack-near { animation: motion-deck-in var(--dur-mid) var(--ease-spring) var(--deck-stagger) backwards; }
+  .deck-ready .deck-stack-far { animation: motion-deck-in var(--dur-mid) var(--ease-spring) calc(var(--deck-stagger) * 2) backwards; }
+  .flashcards-main { transition: filter var(--dur-fast) ease, opacity var(--dur-fast) ease; }
+  .flashcards-main.is-generating { filter: blur(3px); opacity: .4; }
+  .deck-progress-fill { transition: width var(--dur-slow) ease; }
+
+  /* Quiz */
+  .quiz-q { animation: motion-question-in var(--dur-tab-in) var(--ease-motion); }
+  .quiz-opt { animation: motion-list-in var(--dur-tab-in) var(--ease-motion) calc(var(--motion-index, 0) * var(--motion-stagger)) backwards;
+    transition: transform var(--dur-fast) var(--ease-spring), box-shadow var(--dur-fast) var(--ease-spring), background var(--dur-fast) ease; }
+  .quiz-opt:hover:not(:disabled) { transform: translate(-3px, -3px); box-shadow: var(--shadow-lg); }
+  .quiz-opt.correct { animation: motion-correct-flash var(--dur-mid) ease-out; }
+  .quiz-opt.wrong { animation: motion-shake var(--dur-shake) ease-out; }
+  .quiz-feedback, .quiz-result { animation: motion-list-in var(--dur-tab-in) var(--ease-motion); }
+  .quiz-score-fill { transition: width var(--dur-slow) ease; }
+  .motion-correct-pulse { animation: motion-progress-pulse var(--dur-mid) ease-out; }
+
+  /* Smart notes */
+  .motion-note-block { animation: motion-note-in var(--dur-tab-in) ease-out backwards; animation-delay: var(--motion-elapsed, 0ms); }
+  .notes-skeleton .skeleton-line { animation: shimmer 1.5s ease-in-out infinite; }
+  .notes-skeleton .skeleton-line:nth-child(2) { animation-delay: var(--motion-stagger); }
+  .notes-skeleton .skeleton-line:nth-child(3) { animation-delay: calc(var(--motion-stagger) * 2); }
+
+  /* Concept map */
+  .mindmap-node { animation: motion-node-in var(--dur-tab-in) var(--ease-spring) calc(var(--motion-index, 0) * var(--motion-stagger)) backwards;
+    transition: transform var(--dur-fast) var(--ease-spring), box-shadow var(--dur-fast) var(--ease-spring); }
+  .mindmap-node:hover { transform: translate(-50%, -50%) translate(-2px, -2px) scale(1.03); box-shadow: var(--shadow-lg); }
+  .motion-map-edge { animation: motion-edge-in var(--dur-edge) var(--ease-motion) backwards; }
+
+  /* Voice */
+  .wave-bar { transition: height var(--dur-wave) ease-in-out, opacity var(--dur-fast) ease; }
+  .recording-rings span { animation: motion-recording-ring var(--dur-recording) ease-out infinite; }
+  .recording-rings span:nth-child(2) { animation-delay: calc(var(--dur-recording) / -3); }
+  .recording-rings span:nth-child(3) { animation-delay: calc(var(--dur-recording) / -1.5); }
+  .speaking-dot { animation: motion-speaking 1s ease-in-out infinite; }
+
+  /* Vision */
+  .vision-preview-image { animation: motion-list-in var(--dur-tab-in) var(--ease-motion); }
+  .vision-analysis-overlay { animation: motion-fade-in var(--dur-fast) ease; }
+  .vision-analysis-overlay::before { animation: scan 2.5s ease-in-out infinite; }
+
+  /* Profile */
+  .profile-xp-fill { transition: width var(--dur-xp) var(--ease-motion); }
+  .streak-digit-strip.is-rolling { animation: motion-digit-roll var(--dur-streak) var(--ease-motion) backwards; }
+  .achievement-toast.motion-entering { animation: motion-toast-in var(--dur-mid) var(--ease-spring) both; }
+  .achievement-toast.motion-exiting { animation: motion-toast-out var(--dur-fast) ease-in both; }
+
+  /* New keyframes */
+  @keyframes motion-fade-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes motion-tab-in { from { opacity: 0; transform: translateX(var(--tab-distance)); } to { opacity: 1; transform: translateX(0); } }
+  @keyframes motion-tab-out { to { opacity: 0; transform: translateX(calc(var(--tab-distance) * -1)); } }
+  @keyframes motion-banner-out { to { opacity: 0; transform: translateY(-8px); } }
+  @keyframes motion-deck-in { from { opacity: 0; translate: 0 var(--motion-distance); } to { opacity: 1; translate: 0 0; } }
+  @keyframes motion-list-in { from { opacity: 0; transform: translateY(var(--motion-distance)); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes motion-question-in { from { opacity: 0; transform: translateX(var(--tab-distance)); } to { opacity: 1; transform: translateX(0); } }
+  @keyframes motion-correct-flash { 0%, 60% { background: var(--cyan); } 80% { background: var(--surface); } 100% { background: var(--cyan); } }
+  @keyframes motion-shake { 0%, 100% { transform: translateX(0); } 15%, 45%, 75% { transform: translateX(-4px); } 30%, 60%, 90% { transform: translateX(4px); } }
+  @keyframes motion-progress-pulse { 50% { opacity: .5; } }
+  @keyframes motion-note-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes motion-node-in { from { opacity: 0; transform: translate(-50%, -50%) scale(.8); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
+  @keyframes motion-edge-in { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+  @keyframes motion-recording-ring { from { transform: scale(1); opacity: .45; } to { transform: scale(1.6); opacity: 0; } }
+  @keyframes motion-speaking { 50% { opacity: .4; transform: scale(.8); } }
+  @keyframes motion-digit-roll { from { transform: translateY(0); } to { transform: translateY(calc(var(--roll-steps) * -1.5em)); } }
+  @keyframes motion-toast-in { from { opacity: 0; transform: translate(24px, -24px); } to { opacity: 1; transform: translate(0, 0); } }
+  @keyframes motion-toast-out { to { opacity: 0; transform: translate(24px, -12px); } }
+}
+
+/* Reduced motion: preserve final states, flips, statuses, and readable content. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+  .wave-bar { height: 12px; }
+  .recording-rings { display: none; }
+  body, body * { cursor: auto !important; }
+  button, a, [role="button"] { cursor: pointer !important; }
 }

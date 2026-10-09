@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { XpUpdate } from '../lib/userdata';
+import { useReducedMotion } from '../hooks/useMotion';
 
 interface ProfileAchievement {
   id: string;
@@ -20,6 +21,8 @@ interface ProfileTabProps {
   profile: ProfileConfig;
   streak: number;
   xp: number;
+  initialMotionValues: { xp: number; streak: number };
+  onMotionValuesChange: (values: { xp: number; streak: number }) => void;
   historyCount: number;
   completedPomodoros: number;
   activityStats: {
@@ -47,6 +50,8 @@ export function ProfileTab({
   profile,
   streak,
   xp,
+  initialMotionValues,
+  onMotionValuesChange,
   historyCount,
   completedPomodoros,
   activityStats,
@@ -62,6 +67,29 @@ export function ProfileTab({
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
   const levelProgress = Math.max(0, Math.min(100, Math.round((xp / Math.max(profile.xpTarget, 1)) * 100)));
+  const reduced = useReducedMotion();
+  const [barProgress, setBarProgress] = useState(() => Math.min(100, initialMotionValues.xp / Math.max(profile.xpTarget, 1) * 100));
+  const barRef = useRef<HTMLDivElement>(null);
+  const latestValues = useRef({ xp, streak, target: profile.xpTarget });
+  latestValues.current = { xp, streak, target: profile.xpTarget };
+  const [roll, setRoll] = useState(() => ({ from: initialMotionValues.streak, to: streak }));
+  useEffect(() => {
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => setBarProgress(levelProgress));
+    });
+    if (reduced) setBarProgress(levelProgress);
+    return () => cancelAnimationFrame(frame);
+  }, [levelProgress, reduced]);
+  useEffect(() => {
+    setRoll((previous) => previous.to === streak ? previous : { from: previous.to, to: streak });
+  }, [streak]);
+  useLayoutEffect(() => () => {
+    const values = latestValues.current;
+    const fill = barRef.current;
+    const trackWidth = fill?.parentElement?.clientWidth ?? 0;
+    const fraction = trackWidth ? (fill?.getBoundingClientRect().width ?? 0) / trackWidth : 1;
+    onMotionValuesChange({ xp: fraction >= .999 ? values.xp : Math.round(fraction * Math.max(values.target, 1)), streak: values.streak });
+  }, [onMotionValuesChange]);
   const xpToNext = Math.max(profile.xpTarget - xp, 0);
   const currentMonth = useMemo(
     () => calendarMonth.toLocaleString([], { month: 'long', year: 'numeric' }),
@@ -120,8 +148,12 @@ export function ProfileTab({
             <span>{profile.rankLabel}</span>
             <span>{xpToNext} to next target</span>
           </div>
-          <div className="profile-xp-bar">
-            <div className="profile-xp-fill" style={{ width: `${levelProgress}%` }} />
+          <div className="profile-xp-bar" role="progressbar" aria-label="XP toward target" aria-valuemin={0}
+            aria-valuemax={Math.max(profile.xpTarget, 1)} aria-valuenow={Math.min(xp, Math.max(profile.xpTarget, 1))}>
+            <div ref={barRef} className="profile-xp-fill" style={{ width: `${reduced ? levelProgress : barProgress}%` }}
+              onTransitionEnd={(event) => {
+                if (event.propertyName === 'width') onMotionValuesChange({ xp, streak });
+              }} />
           </div>
           <div className="profile-xp-stream">
             {xpUpdates.length === 0 && (
@@ -177,7 +209,22 @@ export function ProfileTab({
           )}
         </div>
         <div className="profile-rank">{profile.rankLabel}</div>
-        <div className="profile-streak-copy">{streak} day streak active</div>
+        <div className="profile-streak-copy">
+          <span className="sr-only">{streak}</span>
+          <span className="streak-number" aria-hidden="true" key={`${roll.from}:${roll.to}`}>
+            {String(streak).split('').map((digit, index) => {
+              const oldDigit = Number(String(roll.from).padStart(String(streak).length, '0')[index] ?? 0);
+              const steps = (Number(digit) - oldDigit + 10) % 10 || 10;
+              const rolling = !reduced && roll.to > roll.from;
+              return <span className="streak-digit-window" key={index}>
+                <span className={rolling ? 'streak-digit-strip is-rolling' : 'streak-digit-strip'}
+                  style={{ '--roll-steps': rolling ? steps : 0 } as CSSProperties}>
+                  {rolling ? Array.from({ length: steps + 1 }, (_, step) => <span key={step}>{(oldDigit + step) % 10}</span>) : <span>{digit}</span>}
+                </span>
+              </span>;
+            })}
+          </span> day streak active
+        </div>
       </div>
 
       <div className="info-block profile-panel profile-panel-activity">
